@@ -5,7 +5,6 @@ from google.adk.agents import SequentialAgent
 # In-order
 from .sub_agents.idea_generator.agent import idea_generator
 from .sub_agents.prompts_generator.agent import prompts_generator
-from .sub_agents.static_content_collection.agent import static_content_collection
 from .sub_agents.json_to_vid_agent.agent import json_to_vid_agent
 from .sub_agents.final_post_creation.agent import final_post_creation
 
@@ -21,7 +20,6 @@ content_creator = SequentialAgent(
     sub_agents=[
         idea_generator,
         prompts_generator,
-        static_content_collection,
         json_to_vid_agent,
         final_post_creation
     ],
