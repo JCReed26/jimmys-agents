@@ -3,3 +3,11 @@ agent-starter-pack
 fastapi
 uvicorn
 mcp
+langchain
+langgraph
+langchain-google-community
+langchain-google-genai
+
+google-auth-oauthlib
+python-dotenv
+beautifulsoup4

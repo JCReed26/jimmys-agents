@@ -5,3 +5,6 @@ __pycache__/
 .env
 .vscode/
 .cursor/
+
+credentials.json
+token.json
