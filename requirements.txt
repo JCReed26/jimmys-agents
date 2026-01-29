@@ -5,9 +5,13 @@ uvicorn
 mcp
 langchain
 langgraph
+langchain-core
 langchain-google-community
 langchain-google-genai
 
 google-auth-oauthlib
 python-dotenv
 beautifulsoup4
+
+ticktick-py
+requests
