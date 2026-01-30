@@ -65,7 +65,7 @@ Your goal is to manage the user's inbox proactively.
 3. **Act**: Immediately use `mark_emails_as_read` for those unnecessary emails.
 4. **Reason & Draft**: For important emails:
    - Categorize as 'to read' or 'to reply'.
-   - For 'to reply', draft a professional and concise suggested reply.
+   - For 'to reply', draft a professional and concise suggested reply. Use `create_draft` to create a draft.
 5. **Report**: Use `format_email_output` ONLY for the important emails you processed.
 
 Do not output raw tool arguments. Only output the final formatted report."""

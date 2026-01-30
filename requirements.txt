@@ -15,3 +15,5 @@ beautifulsoup4
 
 ticktick-py
 requests
+fastapi
+fastapi-utilities

@@ -1,7 +1,7 @@
 import time
 import os
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, Tuple, List, Dict, Any
 
 # LangChain imports
 from langchain.agents import create_agent
@@ -36,7 +36,12 @@ def get_client() -> TickTickClient:
 
 @tool
 def get_by_task_and_project(project_id: str, task_id: str):
-    """Get details of a specific task by its ID and Project ID."""
+    """Get details of a specific task by its ID and Project ID.
+    
+    Args:
+        project_id: The ID of the project the task belongs to.
+        task_id: The ID of the task to get.
+    """
     try:
         return get_client().get_task(project_id, task_id)
     except Exception as e:
@@ -125,7 +130,12 @@ def update_task(task_id: str, project_id: str, title: str = None, content: str =
 
 @tool
 def complete_task(task_id: str, project_id: str):
-    """Mark a task as completed."""
+    """Mark a task as completed.
+    
+    Args:
+        task_id: The ID of the task to complete.
+        project_id: The ID of the project the task belongs to.
+    """
     try:
         return get_client().complete_task(task_id, project_id)
     except Exception as e:
@@ -133,7 +143,12 @@ def complete_task(task_id: str, project_id: str):
 
 @tool
 def delete_task(task_id: str, project_id: str):
-    """Delete a task."""
+    """Delete a task.
+    
+    Args:
+        task_id: The ID of the task to delete.
+        project_id: The ID of the project the task belongs to.
+    """
     try:
         return get_client().delete_task(task_id, project_id)
     except Exception as e:
@@ -153,7 +168,11 @@ def get_user_projects():
 
 @tool
 def get_project_by_id(project_id: str):
-    """Get details of a specific project/list."""
+    """Get details of a specific project/list.
+    
+    Args:
+        project_id: The ID of the project to get.
+    """
     try:
         return get_client().get_project(project_id)
     except Exception as e:
@@ -161,7 +180,11 @@ def get_project_by_id(project_id: str):
 
 @tool
 def get_project_with_data(project_id: str):
-    """Get details of a specific project/list with all tasks."""
+    """Get details of a specific project/list with all tasks.
+    
+    Args:
+        project_id: The ID of the project to get.
+    """
     try:
         return get_client().get_project_with_data(project_id)
     except Exception as e:
@@ -169,7 +192,11 @@ def get_project_with_data(project_id: str):
 
 @tool
 def create_project(name: str):
-    """Create a new project/list."""
+    """Create a new project/list.
+    
+    Args:
+        name: The name of the project to create.
+    """
     try:
         return get_client().create_project(name)
     except Exception as e:
@@ -177,7 +204,12 @@ def create_project(name: str):
 
 @tool
 def update_project(project_id: str, name: str):
-    """Rename a project."""
+    """Rename a project.
+    
+    Args:
+        project_id: The ID of the project to update.
+        name: The new name for the project.
+    """
     try:
         return get_client().update_project(project_id, name)
     except Exception as e:
@@ -254,6 +286,29 @@ def get_date_and_time():
         "timezone": str(now.tzinfo)
     }
 
+@tool
+def get_scheduled_unscheduled_tasks(start_date: str, end_date: str) -> Tuple[List[Dict], List[Dict]]:
+    """Schedule unscheduled tasks for the selected days.
+    
+    Args:
+        start_date: The start date to get scheduled and unscheduled tasks for.
+        end_date: The end date to get scheduled and unscheduled tasks for.
+    """
+    try: 
+        all_tasks = get_all_tasks_overview()
+        scheduled_tasks, unscheduled_tasks = [], []
+        for project, tasks in all_tasks.items():
+            for task in tasks:
+                if task.get('due'):
+                    scheduled_tasks.append(task)
+                else:
+                    unscheduled_tasks.append(task)
+
+        return scheduled_tasks, unscheduled_tasks
+    except Exception as e:
+        return f"Error scheduling unscheduled tasks: {str(e)}"
+
+    
 # Re-use existing tool list
 tools = [
     get_by_task_and_project,
@@ -269,32 +324,61 @@ tools = [
     delete_project,
     get_all_tasks_overview,
     get_date_and_time,
+    get_scheduled_unscheduled_tasks,
 ]
 
 system_prompt_text = """
-You are a Product Manager Agent responsible for managing the user's TickTick todo list.
+You are the **TickTick Agentic Manager**, an expert executive assistant capable of managing complex schedules and projects with precision.
 
-Responsibilities:
-1. Manage projects (which represent lists of tasks).
-2. Create and organize tasks with clear titles and descriptions.
-3. Break down large goals into subtasks (if applicable).
-4. Prioritize work by setting dates and organizing blocks.
-5. Manage timezones effectively using the `time_zone` field.
+### CORE OBJECTIVES
+1.  **Manage:** Organize projects, tasks, and subtasks efficiently.
+2.  **Schedule:** Plan events and tasks respecting the user's timezone and working hours.
+3.  **Refine:** Improve user inputs by adding detailed descriptions, checklists, and priorities.
+4.  **Adapt:** Reschedule dynamically when conflicts arise.
 
-Each project represents a different list (e.g., Work, Personal, Gym).
-Always check existing projects using `get_user_projects` before creating a new one to avoid duplicates.
+### TOOL USAGE STRATEGY & "GETTING IDS"
+You cannot interact with a task (update, complete, delete) without its `task_id` and `project_id`.
+*   **Step 1: DISCOVERY.** If you do not have the ID, you MUST search for it first.
+    *   Use `get_all_tasks_overview` to see a broad snapshot of open tasks across all projects.
+    *   Use `get_project_with_data` if you know the specific list/project name.
+*   **Step 2: VERIFICATION.** specific IDs (like `65a9f...`) are required. Never guess an ID.
+*   **Step 3: ACTION.** Once you have the ID, proceed with `update_task`, `complete_task`, etc.
 
-STANDARD OPERATING PROCEDURE:
-1. EXPLORE FIRST:
-   - When the user asks to "manage my tasks" or "check my list", ALWAYS start by calling `get_user_projects` followed by `get_all_tasks_overview`.
-   - `get_all_tasks_overview` is your primary tool for "reading" the user's state. It fetches everything and sorts it by project.
-   - DO NOT make the user ask for each list individually.
+### WRITING HIGH-QUALITY DESCRIPTIONS
+When creating or updating tasks, always upgrade the `desc` (description) field if the task is non-trivial.
+*   **Format:** Use Markdown.
+*   **Structure:**
+    *   Start with a 1-sentence goal.
+    *   Use bullet points for details.
+    *   Use `[ ]` checkboxes for sub-steps (or use the `items` argument for actual subtasks).
+*   **Example:**
+    *   *Bad:* "Fix the bug."
+    *   *Good:* "Investigate and fix the login timeout issue.\n\n**Steps:**\n- [ ] Reproduce locally\n- [ ] Check auth logs\n- [ ] Push fix to staging"
 
-2. CONTEXT AWARENESS:
-   - Before creating a new task, check if a similar one exists in the fetched task list.
-   - If the user references "that task", look at the most recently fetched tasks in your memory to find the ID.
-   - Use `get_date_and_time` to get the current date and time.
-   - When creating tasks with dates, try to use the user's timezone if known or provided by `get_date_and_time`.
+### HANDLING DATE & TIME
+*   **ALWAYS** call `get_date_and_time` at the start of any scheduling request to ground yourself in the "Now".
+*   Relative dates ("next Friday", "tomorrow afternoon") must be calculated relative to this timestamp.
+*   When scheduling, check for conflicts using `get_scheduled_unscheduled_tasks` or `get_all_tasks_overview`.
+
+### COMPLEX TASK BREAKDOWN
+If a user provides a complex goal (e.g., "Plan a vacation"), do not just make one task.
+1.  **Analyze** the goal.
+2.  **Break it down** into atomic steps.
+3.  **Create** a main task with the high-level goal.
+4.  **Add Subtasks** using the `items` list in `create_task` OR create separate tasks in a dedicated Project.
+
+### STANDARD OPERATING PROCEDURE (CoT)
+Before answering, perform this internal loop:
+1.  **Check Context:** Do I know the current time? Do I have the necessary IDs?
+2.  **Gather Info:** Call `get_all_tasks_overview` or `get_projects` if context is missing.
+3.  **Reason:** Plan the sequence of actions. (e.g., "Found task X, now I need to move it to next week").
+4.  **Execute:** Call the modification tools.
+5.  **Confirm:** Report back clearly to the user, summarizing what was changed.
+
+### CRITICAL RULES
+*   **NEVER** delete a task without explicit user confirmation unless it is an obvious duplicate you just created.
+*   **NEVER** output raw JSON objects to the user. Summarize the result in plain English.
+*   **ALWAYS** default `project_id` to "inbox" if unspecified.
 """
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
