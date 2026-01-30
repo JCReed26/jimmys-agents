@@ -145,38 +145,43 @@ class TickTickClient:
         response.raise_for_status()
         return response.json()
 
-    def create_task(self, title: str, project_id: str = "inbox", content: str = None, 
-                    start_date: str = None, due_date: str = None) -> Dict[str, Any]:
-        """Create a new task."""
+    def create_task(self, title: str, project_id: str = "inbox", **kwargs) -> Dict[str, Any]:
+        """
+        Create a new task with support for all fields.
+        
+        Args:
+            title: Task title
+            project_id: Project ID (defaults to 'inbox')
+            **kwargs: Additional fields matching the TickTick JSON structure 
+                      (e.g., content, desc, isAllDay, priority, reminders, items, etc.)
+        """
         url = f"{self.API_URL}/task"
+        
+        # Base payload
         data = {
             "title": title,
-            "projectId": project_id if project_id else "inbox"
+            "projectId": project_id if project_id else "inbox",
         }
-        if content:
-            data["content"] = content
-        if start_date:
-            data["startDate"] = start_date
-        if due_date:
-            data["dueDate"] = due_date
-            
+        
+        # Merge any additional fields provided via kwargs
+        # This allows passing 'startDate', 'dueDate', 'priority', 'reminders', 'items' (subtasks), etc.
+        data.update(kwargs)
+
         response = requests.post(url, headers=self._get_headers(), json=data)
         response.raise_for_status()
         return response.json()
 
-    def update_task(self, task_id: str, project_id: str, title: str = None, content: str = None) -> Dict[str, Any]:
-        """Update a task."""
-        # Note: TickTick API usually requires fetching the task first to update it fully, 
-        # or passing the full object. We'll do a partial update if the API supports it, 
-        # or fetch-modify-save. The open API usually supports POST to update.
-        
-        # Fetch first to be safe
+    def update_task(self, task_id: str, project_id: str, **kwargs) -> Dict[str, Any]:
+        """
+        Update a task. 
+        Fetches the existing task first to ensure we have the full object, 
+        then updates only the fields provided in kwargs.
+        """
+        # Fetch first to ensure we have the complete object required for updates
         task = self.get_task(project_id, task_id)
         
-        if title:
-            task["title"] = title
-        if content:
-            task["content"] = content
+        # Update the task object with new values
+        task.update(kwargs)
             
         url = f"{self.API_URL}/task/{task_id}"
         response = requests.post(url, headers=self._get_headers(), json=task)
@@ -207,5 +212,13 @@ class TickTickClient:
         # Let's assume standard REST DELETE for now.
         url = f"{self.API_URL}/project/{project_id}/task/{task_id}"
         response = requests.delete(url, headers=self._get_headers())
+        response.raise_for_status()
+        return response.json()
+
+    def get_project_with_data(self, project_id: str) -> Dict[str, Any]:
+        """Get project details along with all tasks inside it."""
+        # This endpoint is used by some community libraries to get project + tasks
+        url = f"{self.API_URL}/project/{project_id}/data"
+        response = requests.get(url, headers=self._get_headers())
         response.raise_for_status()
         return response.json()
