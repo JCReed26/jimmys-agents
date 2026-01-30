@@ -5,6 +5,7 @@ uvicorn
 mcp
 langchain
 langgraph
+langgraph-cli[inmem]
 langchain-core
 langchain-google-community
 langchain-google-genai
