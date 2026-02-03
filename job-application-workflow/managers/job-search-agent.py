@@ -1,4 +1,4 @@
-"""Polls job application sites for new jobs"""
+"""Scrapes job application sites for new jobs"""
 
 JobTitles = [
     "Entry Level Software Engineer",
@@ -48,4 +48,24 @@ JobSites = [
     "Glassdoor",
     "Indeed",
 ]
+import asyncio
+from pyppeteer import launch, browser
+
+async def get_pages():
+
+    pages = []
+
+    browser = await launch(headless=False)
+
+    for site in JobSites:
+        if site == "LinkedIn":
+            page = await browser.newPage()
+            await page.goto("https://www.linkedin.com/jobs/search/?f_E=2&geoId=90009590&keywords=software%20engineer&location=United%20States")
+            pages.append(page)
+        elif site == "ZipRecruiter":
+            page = await browser.newPage()
+            await page.goto("https://www.ziprecruiter.com/Search?q=software%20engineer&l=United%20States")
+            pages.append(page)
+
+    return pages
 

@@ -13,6 +13,7 @@ langchain-google-genai
 google-auth-oauthlib
 python-dotenv
 beautifulsoup4
+pyppeteer
 
 ticktick-py
 requests
