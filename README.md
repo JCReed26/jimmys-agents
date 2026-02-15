@@ -4,7 +4,15 @@ agents, workflows, and agentic systems
 
 ---
 
-## Active Agents
+## Currently Working On
+
+### Job App Chain
+
+A LangGraph Workflow that scrapes jobs -> sorts -> optimizes -> adds to sheet with autonomous updated tracking as user interacts.
+
+---
+
+## Agents
 
 ### Email Agent
 
