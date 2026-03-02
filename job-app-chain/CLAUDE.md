@@ -91,3 +91,19 @@ class JobApplication(JobDescription):
 4.  **Google Docs Templates**: The agent will need a specific Google Drive folder ID to look for templates and a destination folder to save the new files.
 
 Does this structure align with your vision? If so, you can copy this directly into `@job-app-chain/CLAUDE.md`.
+
+## Iterative Update Loop
+
+- Whenever something important is discovered or something important for fixing a bug in the future add it to the list of iterative improvement
+
+### List of iterative improvement
+
+- example entry | date
+
+## How to operate claude code
+
+1. you have claude in chrome. This means you can go to websites and request for human in the loop input to setup api keys, get credentials, and set environment variables. This also allows testing of all code through the browser.
+
+2. update md files - always update or improve upon rules set for yourself, this helps you to deliver what I want from you.
+
+3. use superpowers, always utilize and download skills that are helpful toward completing a test, utilize sub-agents if necessary determine if there really is an improvement to utilizing sub-agents before spawning them.

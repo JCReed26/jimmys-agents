@@ -6,7 +6,7 @@ This plan follows a standard SDLC approach: Requirements -> Design -> Implementa
 **Goal**: Get the project ready for development with all necessary dependencies and credentials.
 **Estimated Time**: 1.5 - 2 Hours
 
-- [ ] **1.1. Project Initialization**
+- [x] **1.1. Project Initialization**
   - Create a virtual environment (`python -m venv venv`).
   - Initialize `requirements.txt` with core libraries:
     - `langgraph`, `langchain`, `langchain-google-genai`
