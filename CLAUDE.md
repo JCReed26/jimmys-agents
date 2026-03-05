@@ -147,6 +147,7 @@ Agents expose a simple internal API (or write to a shared state file/DB) that th
 - **LangGraph Dev Server for agent serving**: Each agent is served via `langgraph dev` (or `langgraph up`) which gives standardized `/invoke`, `/stream`, `/playground` endpoints and SSE streaming out of the box. The dashboard communicates with agents via these HTTP endpoints. Ports: gmail=8001, calendar=8002, budget=8003, ticktick=8004, dashboard=8080.
 - **ID discovery before action**: Agents (especially TickTick) must fetch IDs before acting on entities — never assume IDs.
 - **Volume-mount credentials**: Never bake OAuth tokens or `credentials.json` into Docker images. Always use volume mounts.
+- **Agent Dockerfiles use repo root as build context**: Each agent Dockerfile copies `shared/` explicitly. Build context in docker-compose is always `.` (repo root) with `dockerfile: <agent>/Dockerfile`. Never use the agent subdirectory as the build context.
 
 ### How to Add a Rule
 When you fix a non-obvious bug, make an architectural decision with lasting implications, or Jimmy says "add this to rules" — append a bullet here with a short explanation of *why* the rule exists.

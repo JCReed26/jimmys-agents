@@ -78,8 +78,9 @@ agent_executor = create_agent(
     model=llm,
     tools=tools,
     system_prompt=system_prompt,
-    callbacks=[MetricsCallback(agent_name="gmail-agent")]
     )
+
+metrics_cb = MetricsCallback(agent_name="gmail-agent")
 
 def run_agent_cycle():
     print(f"\n--- Starting Polling Cycle: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
@@ -88,6 +89,7 @@ def run_agent_cycle():
 
     events = agent_executor.stream(
         {"messages": [("user", query)]},
+        config={"callbacks": [metrics_cb]},
         stream_mode="values",
     )
     for event in events:
