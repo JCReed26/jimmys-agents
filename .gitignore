@@ -7,17 +7,15 @@ __pycache__/
 .cursorrules
 
 # Secrets (volume-mounted in Docker, never baked into images)
+# Move all token/credential files into secrets/ — that entire dir is ignored
 secrets/
 data/
-
-# Legacy locations (kept during migration)
-credentials.json
-calendar_token.json
-sheets_token.json
-token.json
-budget_state.json
-.token-oauth
 
 guardrails.md
 state.md
 progress.md
+
+# Test artifacts
+.pytest_cache/
+*.pyc
+tests/**/__pycache__/
