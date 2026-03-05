@@ -1,4 +1,6 @@
 import time
+import sys
+import os
 from datetime import datetime
 from langchain.agents import create_agent
 from langchain.tools import tool
@@ -7,6 +9,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from typing import List
 from dotenv import load_dotenv
 from models import EmailAnalysis, ActionType
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shared.metrics_callback import MetricsCallback
 
 load_dotenv()
 
@@ -71,9 +75,10 @@ Your goal is to manage the user's inbox proactively.
 Do not output raw tool arguments. Only output the final formatted report."""
 
 agent_executor = create_agent(
-    model=llm, 
-    tools=tools, 
-    system_prompt=system_prompt
+    model=llm,
+    tools=tools,
+    system_prompt=system_prompt,
+    callbacks=[MetricsCallback(agent_name="gmail-agent")]
     )
 
 def run_agent_cycle():
