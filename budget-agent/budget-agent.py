@@ -5,8 +5,13 @@ from typing import Literal, List, Optional, Dict, Any
 from typing_extensions import TypedDict, Annotated
 import operator
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shared.auth import get_google_service
+from shared.metrics_callback import MetricsCallback
+
 from langchain.messages import (
-    AnyMessage, 
+    AnyMessage,
     SystemMessage,
     HumanMessage,
 )
@@ -17,67 +22,12 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import ToolNode
 
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
 
 load_dotenv()
 
-# Auth and Config
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
-TOKEN_FILE = 'sheets_token.json'
-CREDENTIALS_FILE = '../credentials.json'
-STATE_FILE = "budget_state.json"
-
-def get_spreadsheet_service():
-    """Authenticates and returns the Google Sheets API service."""
-    creds = None
-    
-    # Adjust path if running from root vs folder
-    token_path = TOKEN_FILE
-    if not os.path.exists(token_path) and os.path.exists(f"budget-agent/{TOKEN_FILE}"):
-        token_path = f"budget-agent/{TOKEN_FILE}"
-        
-    creds_path = CREDENTIALS_FILE
-    if not os.path.exists(creds_path):
-        # Try looking in current dir or root
-        if os.path.exists("credentials.json"):
-            creds_path = "credentials.json"
-        elif os.path.exists("../credentials.json"):
-            creds_path = "../credentials.json"
-    
-    # 1. Try to load existing token
-    if os.path.exists(token_path):
-        try:
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        except Exception:
-            print("Corrupt token file, re-authenticating...")
-            creds = None
-    
-    # 2. Refresh or Login if needed
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                print("Token refresh failed, re-authenticating...")
-                creds = None
-                
-        if not creds:
-            if not os.path.exists(creds_path):
-                raise FileNotFoundError(f"Missing credentials.json at {creds_path}. Please download it from Google Cloud Console.")
-                
-            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-            creds = flow.run_local_server(port=0)
-            
-        # Save the new token
-        with open(token_path, 'w') as token:
-            token.write(creds.to_json())
-            
-    return build('sheets', 'v4', credentials=creds)
+# Config
+STATE_FILE = "/app/data/budget_state.json"
 
 # State Manager for Budget Agent
 class BudgetManager:
@@ -100,6 +50,7 @@ class BudgetManager:
 
     def save_state(self):
         """Saves current state to local JSON file."""
+        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
         with open(STATE_FILE, 'w') as f:
             json.dump({
                 "spreadsheet_id": self.spreadsheet_id,
@@ -117,7 +68,7 @@ class BudgetManager:
         """Fetches current sheet names from the API and updates local cache."""
         if not self.spreadsheet_id:
             return
-        
+
         try:
             meta = self.service.spreadsheets().get(spreadsheetId=self.spreadsheet_id).execute()
             sheets = meta.get('sheets', [])
@@ -131,7 +82,7 @@ class BudgetManager:
         """Adds a new worksheet (tab) to the spreadsheet."""
         if not self.spreadsheet_id:
             raise ValueError("No spreadsheet ID set.")
-            
+
         body = {
             "requests": [{
                 "addSheet": {
@@ -172,7 +123,7 @@ def refresh_spreadsheet_metadata_tool():
 
 def create_budget_tools(manager: BudgetManager, toolkit: SheetsToolkit) -> List[BaseTool]:
     """Creates a list of tools including patched standard tools and custom management tools."""
-    
+
     # Create simple Tool objects from functions
     save_tool = tool(save_budget_spreadsheet_id_tool)
     add_sheet_tool = tool(add_worksheet_tool)
@@ -181,26 +132,26 @@ def create_budget_tools(manager: BudgetManager, toolkit: SheetsToolkit) -> List[
     # Patch Standard Tools (Gemini Compatibility)
     standard_tools = toolkit.get_tools()
     fixed_tools = []
-    
+
     for tool_obj in standard_tools:
         # Filter out complex 'batch' tools that break Gemini
         if "batch" in tool_obj.name:
             continue
-            
+
         # Patch 'values' (used in Update/Append)
         if "values" in tool_obj.args:
             if hasattr(tool_obj.args_schema, "model_fields"):
                 tool_obj.args_schema.model_fields["values"].annotation = List[List[str]]
                 if hasattr(tool_obj.args_schema, "model_rebuild"):
                     tool_obj.args_schema.model_rebuild()
-                
+
         # Patch 'initial_data' (used in Create)
         if "initial_data" in tool_obj.args:
             if hasattr(tool_obj.args_schema, "model_fields"):
                 tool_obj.args_schema.model_fields["initial_data"].annotation = Optional[List[List[str]]]
                 if hasattr(tool_obj.args_schema, "model_rebuild"):
                     tool_obj.args_schema.model_rebuild()
-                
+
         fixed_tools.append(tool_obj)
 
     return fixed_tools + [save_tool, add_sheet_tool, refresh_tool]
@@ -255,20 +206,25 @@ Now, look at this budget and tell me what you see. And don't sugarcoat it.
 # AGENT GRAPH
 # ==============================================================================
 
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
 # Initialize Services
 try:
-    service = get_spreadsheet_service()
+    service = get_google_service(
+        scopes=SCOPES,
+        token_path="/app/secrets/sheets_token.json",
+        credentials_path="/app/secrets/credentials.json",
+        service_name="sheets",
+        service_version="v4",
+    )
     toolkit = SheetsToolkit(api_resource=service)
     manager = BudgetManager(service)
     tools = create_budget_tools(manager, toolkit)
-    
-    # Initial Metadata Sync if ID exists
     if manager.spreadsheet_id:
         manager.sync_metadata()
         print(f"[System] Loaded existing budget ID: {manager.spreadsheet_id}")
     else:
         print("[System] No existing budget found.")
-
 except Exception as e:
     print(f"Failed to initialize: {e}")
     exit(1)
@@ -285,7 +241,7 @@ def llm_call(state: dict):
     current_prompt = BASE_SYSTEM_PROMPT
     if manager.spreadsheet_id:
         current_prompt += f"\n\n### CURRENT STATE (LIVE CACHE)\n- **Spreadsheet ID:** {manager.spreadsheet_id}\n- **Known Sheets:** {manager.sheet_names}\nUse this metadata to avoid guessing sheet names."
-    
+
     response = llm_with_tools.invoke(
         [SystemMessage(content=current_prompt)] + state["messages"]
     )
@@ -324,8 +280,9 @@ agent = agent_builder.compile(checkpointer=memory)
 
 if __name__ == "__main__":
     print("Starting Budget Agent with Smart Metadata Manager...")
-    
+
     config = {"configurable": {"thread_id": "1"}}
+    metrics_cb = MetricsCallback(agent_name="budget-agent")
 
     while True:
         try:
@@ -336,7 +293,7 @@ if __name__ == "__main__":
 
             events = agent.stream(
                 {"messages": [HumanMessage(content=user_input)]},
-                config=config,
+                config={**config, "callbacks": [metrics_cb]},
                 stream_mode="values",
             )
 
@@ -346,7 +303,7 @@ if __name__ == "__main__":
 
                     if last_msg.type == "ai":
                         print(f"Agent: {last_msg.content}")
-        
+
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
