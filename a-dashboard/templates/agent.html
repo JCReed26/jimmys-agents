@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ agent.name }} — jimmy's agents</title>
+  <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+  <header class="app-header">
+    <a href="/" class="back-link">← dashboard</a>
+    <span class="agent-name" style="font-size:13px">{{ agent.name }}</span>
+    <span class="status-badge status-{{ agent.status | lower }}">{{ agent.status }}</span>
+  </header>
+  <main class="main-content">
+    <div class="agent-detail">
+
+      <!-- LEFT: stats + HITL -->
+      <div class="detail-left">
+        <section>
+          <div class="detail-section-title">metrics</div>
+          <div class="metric-row">
+            <span class="metric-label">avg latency</span>
+            <span class="metric-value accent">{{ (agent.avg_duration_ms / 1000) | round(2) }}s</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">total runs</span>
+            <span class="metric-value">{{ agent.total_runs }}</span>
+          </div>
+          <div class="metric-row">
+            <span class="metric-label">success rate</span>
+            <span class="metric-value">{{ agent.success_rate }}%</span>
+          </div>
+        </section>
+
+        <section>
+          <div class="detail-section-title">top tools</div>
+          {% for tool in agent.top_tools %}
+          <div class="metric-row">
+            <span class="metric-label">{{ tool.name }}</span>
+            <span class="metric-value">x{{ tool.count }}</span>
+          </div>
+          {% else %}
+          <div style="color:var(--text-dim);font-size:11px">no runs yet</div>
+          {% endfor %}
+        </section>
+
+        {% if agent.name != 'job-app-chain' %}
+        <section>
+          <div class="detail-section-title">hitl inbox</div>
+          <div id="hitl-inbox-items">
+            <div style="color:var(--text-dim);font-size:11px">loading...</div>
+          </div>
+        </section>
+        {% endif %}
+
+        <section>
+          <div class="detail-section-title">recent runs</div>
+          <table class="runs-table">
+            <thead>
+              <tr><th>time</th><th>dur</th><th>tools</th><th>status</th></tr>
+            </thead>
+            <tbody>
+              {% for run in runs %}
+              <tr>
+                <td>{{ run.started_at }}</td>
+                <td>{{ (run.duration_ms / 1000) | round(1) }}s</td>
+                <td>{{ run.tool_calls | fromjson | length if run.tool_calls else 0 }}</td>
+                <td class="{{ 'run-success' if not run.error else 'run-error' }}">
+                  {{ '✓' if not run.error else '✗' }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <!-- RIGHT: chat -->
+      <div class="chat-panel" id="chat-panel"
+           data-agent="{{ agent.name }}"
+           data-available="{{ 'true' if agent.url and agent.status != 'DOWN' else 'false' }}">
+        <div class="chat-header">&gt; {{ agent.name }} // chat</div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-row">
+          <input class="chat-input" id="chat-input"
+                 placeholder="{{ '> _' if agent.status != 'DOWN' else 'agent offline' }}"
+                 {{ 'disabled' if agent.status == 'DOWN' or agent.name == 'job-app-chain' }}>
+          <button class="btn btn-primary" id="chat-send">send</button>
+        </div>
+      </div>
+
+    </div>
+  </main>
+  <script src="/static/js/chat-panel.js" type="module"></script>
+</body>
+</html>

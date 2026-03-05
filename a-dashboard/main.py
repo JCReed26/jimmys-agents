@@ -1,3 +1,4 @@
+import json
 import os
 import aiohttp
 from fastapi import FastAPI, HTTPException, Request
@@ -97,3 +98,5 @@ async def agent_chat(name: str, request: Request):
 if os.path.exists("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates") if os.path.exists("templates") else None
+if templates:
+    templates.env.filters["fromjson"] = json.loads
