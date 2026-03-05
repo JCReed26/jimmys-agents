@@ -8,6 +8,8 @@ DB_PATH = os.environ.get("METRICS_DB_PATH", "/app/data/metrics.db")
 
 async def get_agent_stats(agent_name: str, db_path: str = DB_PATH) -> dict:
     """Return aggregated stats for one agent."""
+    if not os.path.exists(db_path):
+        return {"total_runs": 0, "success_rate": 0, "avg_duration_ms": 0, "top_tools": []}
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -42,6 +44,8 @@ async def get_agent_stats(agent_name: str, db_path: str = DB_PATH) -> dict:
 
 async def get_recent_runs(agent_name: str, limit: int = 20, db_path: str = DB_PATH) -> list[dict]:
     """Return last N runs for an agent, most recent first."""
+    if not os.path.exists(db_path):
+        return []
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
