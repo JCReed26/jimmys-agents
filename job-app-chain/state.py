@@ -1,60 +1,85 @@
-from typing import TypedDict, List, Optional
+from operator import add
+from typing import TypedDict, List, Annotated
 from enum import Enum
 
-class JobStatus(Enum):
-    NEW = "new"
-    APPROVED = "approved"
-    REJECTED = "rejected"
-
-class ApplicationStatus(Enum):
-    READY_FOR_REVIEW = "ready_for_review"
-    DECIDED_AGAINST = "decided_against"
-    APPLIED = "applied"
-    IN_PROGRESS = "in_progress"
-    GHOSTED = "ghosted"
-    REJECTED = "rejected"
-    ACCEPTED = "accepted"
-
+# JobSpy Returned table --> must match job description for classification after that it becomes an application before hitting job_inbox
+# SITE | TITLE | COMPANY | CITY | STATE | JOB_TYPE | INTERVAL | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | DESCRIPTION
 class JobDescription(TypedDict):
-    id: str                 # hash of url 
+    site: str
     title: str
     company: str
-    url: str
-    raw_description: str
-    score: Optional[int]                # score 0-100
-    reasoning: Optional[str]            # reasoning for score
-    status: JobStatus
+    city: str
+    state: str
+    job_type: str
+    interval: str
+    min_amount: str
+    max_amount: str
+    job_url: str
+    description: str
+
+class RejectedJob(JobDescription):
+    rejected_reason: str
+    rejected_date: str
+
+class JobInboxItem(Enum):
+    NEW = "new" # default state set by ai
+    APPROVED = "approved" # approved by jimmy to go to optimization process
+    REJECTED = "rejected" # rejected by jimmy to go to rejected tab
+
+class JobInboxItem(JobDescription):
+    classification: str
+    reasoning: str
+    inbox_status: JobInboxItem = JobInboxItem.NEW
     found_date: str
 
-class JobApplication(JobDescription):
-    resume_url: str             # Google Drive Link 
-    cover_letter_url: str       # Google Drive Link
-    application_status: ApplicationStatus
+class OptimizedItem(Enum):
+    NEW = "new" # default state set by ai
+    APPROVED = "approved" # approved by jimmy to go to tracker aka applied for the job
+    REJECTED = "rejected" # rejected by jimmy to go to rejected tab aka decided against applying for the job
 
-    # Optional Fields
-    salary_range: Optional[str]
-    location: Optional[str]
-    date_posted: Optional[str]
-    
-    
+class OptimizedJob(JobInboxItem):
+    resume_url: str
+    cover_letter_url: str
+    reasoning: str
+    optimized_status: OptimizedItem = OptimizedItem.NEW
+    optimized_date: str
 
-class LogEntry(TypedDict):
-    timestamp: str
-    level: str
-    message: str
-    node: str
+class TrackedItem(Enum):
+    APPLIED = "applied"                     # applied for the job default state
+    REJECTED = "rejected"                   # rejected by company after applying for the job
+    GHOSTED = "ghosted"                     # no contact from company after applying
+    INTERVIEWING = "interviewing"           # interviewing for the job
+    FAILED_INTERVIEW = "failed_interview"   # failed interview for the job
+    OFFER_RECEIVED = "offer_received"       # offer received from the company
+    OFFER_ACCEPTED = "offer_accepted"       # offer accepted by the company
+    OFFER_REJECTED = "offer_rejected"       # offer rejected by the company
+    OFFER_EXPIRED = "offer_expired"         # offer expired by the company
+
+class TrackedJob(OptimizedJob):
+    tracked_status: TrackedItem = TrackedItem.APPLIED
+    applied_date: str
 
 class JobAppState(TypedDict):
-    # Data Containers
-    scraped_jobs: List[JobDescription]
-    job_inbox: List[JobDescription]
-    optimized_jobs: List[JobApplication]
-    rejected_jobs: List[JobDescription]
-    """
-    why no applied jobs? will become too large a list and not necessary for the main purpose of the workflow, if we want to do operations on applied jobs we get them from the tracker tab.
-    """
+    new_jobs: Annotated[List[JobInboxItem], add]
+    approved_jobs: Annotated[List[JobInboxItem], add]
+    optimized_jobs: Annotated[List[OptimizedJob], add]
+    rejected_jobs: Annotated[List[RejectedJob | JobInboxItem | OptimizedJob], add]
+    tracked_jobs: Annotated[List[TrackedJob], add]
 
-    # Metadata
-    logs: List[LogEntry]
-    last_execution_time: str
-    is_locked: bool # is the sheet red(block edits) or green(allow edits) its a mutex lock
+"""
+All of these will correspond to an id in a local sqlite database for each job so that no matter where the job is in the workflow or sheet all data can be queried if needed.
+How the tables will look like on the google sheet:
+
+Inbox Job Table ('job_inbox' tab)
+SITE | TITLE | COMPANY | CITY | STATE | JOB_TYPE | INTERVAL | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | DESCRIPTION | CLASSIFICATION | REASONING | INBOX_STATUS | FOUND_DATE | ID
+
+Optimized Job Table ('optimized_jobs' tab)
+TITLE | COMPANY | CITY | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | RESUME_URL | COVER_LETTER_URL | OPTIMIZED_STATUS | OPTIMIZED_DATE | ID
+
+Rejected Job Table ('rejected_jobs' tab)
+SITE | TITLE | COMPANY | CITY | STATE | JOB_TYPE | INTERVAL | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | DESCRIPTION | REJECTED_REASON | REJECTED_DATE | ID
+
+Tracked Job Table ('tracked_jobs' tab)
+TITLE | COMPANY | CITY | STATE | JOB_URL | TRACKED_STATUS | APPLIED_DATE | ID
+
+"""

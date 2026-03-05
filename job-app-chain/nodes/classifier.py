@@ -7,21 +7,6 @@ load_dotenv()
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
-@tool
-def grade_job(job: Job) -> Job:
-    """Grade a job for qualification for the user"""
-    pass
-
-@tool
-def reason_about_job(job: Job) -> Job:
-    """Reason about a job for qualification for the user"""
-    pass
-
-@tool
-def classify_job(job: Job) -> Job:
-    """Classify a job into rejected or approved"""
-    pass
-
 # sequentially call the tools to grade, reason, and classify the job
 
 system_prompt = """
@@ -32,6 +17,6 @@ You will be given a list of job descriptions with the following fields:
 
 classifier_agent = create_agent(
     model=llm,
-    tools=[grade_job, reason_about_job, classify_job],
+    tools=[],
     system_prompt=system_prompt,
 )
