@@ -1,21 +1,22 @@
-/.env
 .venv/
 **/node_modules/
 __pycache__/
 .env
 .vscode/
 .cursor/
+.cursorrules
 
+# Secrets (volume-mounted in Docker, never baked into images)
+secrets/
+data/
+
+# Legacy locations (kept during migration)
 credentials.json
 calendar_token.json
 sheets_token.json
 token.json
-
 budget_state.json
-
-.cursor/
 .token-oauth
-.cursorrules
 
 guardrails.md
 state.md
