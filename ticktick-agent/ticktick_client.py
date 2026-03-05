@@ -20,7 +20,7 @@ class TickTickClient:
         self.client_id = os.getenv("TICKTICK_CLIENT_ID")
         self.client_secret = os.getenv("TICKTICK_CLIENT_SECRET")
         self.redirect_uri = os.getenv("TICKTICK_REDIRECT_URI", "http://127.0.0.1:8080")
-        self.token_file = ".token-oauth"
+        self.token_file = os.environ.get("TICKTICK_TOKEN_PATH", "/app/secrets/.token-oauth")
         self.access_token = self._load_token()
 
     def _load_token(self) -> Optional[str]:
@@ -33,6 +33,8 @@ class TickTickClient:
                 return None
         return None
 
+    # NOTE: Docker deployment — secrets/ must NOT be mounted :ro for ticktick-agent
+    # since this method writes the token file. Use read-write mount in docker-compose.
     def _save_token(self, token_data: Dict[str, Any]):
         with open(self.token_file, "w") as f:
             json.dump(token_data, f)

@@ -150,5 +150,7 @@ Agents expose a simple internal API (or write to a shared state file/DB) that th
 - **Agent Dockerfiles use repo root as build context**: Each agent Dockerfile copies `shared/` explicitly. Build context in docker-compose is always `.` (repo root) with `dockerfile: <agent>/Dockerfile`. Never use the agent subdirectory as the build context.
 - **MetricsCallback works in REPL mode only**: Callbacks are Python objects and cannot be serialized over HTTP. When agents run via `langgraph up`, SQLite metrics are not captured via MetricsCallback. LangSmith (when `LANGSMITH_TRACING=true`) handles server-mode traces automatically at the environment level.
 
+- **ticktick-agent secrets mount must be read-write**: Unlike other agents, ticktick-agent writes its OAuth token via `_save_token` in `ticktick_client.py`. Mount `secrets/` as `rw` (not `:ro`) in docker-compose for this agent.
+
 ### How to Add a Rule
 When you fix a non-obvious bug, make an architectural decision with lasting implications, or Jimmy says "add this to rules" — append a bullet here with a short explanation of *why* the rule exists.

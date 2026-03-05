@@ -10,6 +10,10 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 from dotenv import load_dotenv
 
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shared.metrics_callback import MetricsCallback
+
 # Import our custom client
 from ticktick_client import TickTickClient
 
@@ -401,9 +405,9 @@ def run_agent_cycle():
         
     try:
         result = agent.invoke(
-            {"messages": [("user", user_input)]}, 
-            {"configurable": {"thread_id": "1"}}
-            )
+            {"messages": [("user", user_input)]},
+            {"configurable": {"thread_id": "1"}, "callbacks": [MetricsCallback(agent_name="ticktick-agent")]}
+        )
         last_message = result["messages"][-1]
         content = last_message.content
 
