@@ -46,3 +46,19 @@ class SheetManager:
         pass
 
 sheet_manager = SheetManager(sheet_id=os.getenv("SHEET_ID"), drive_folder_id=os.getenv("DRIVE_FOLDER_ID"))
+
+def sheets_reader_node(state: JobAppState) -> JobAppState:
+    """Reads the sheets systematically and returns the JobAppState"""
+    # in parallel or batch read the job_inbox tab, optimized_jobs tab
+    # finally reads the metadata tab to get other ids, get counts, etc. 
+    # verify that data was pulled correctly by comparing counts to metadata
+    # return the jobappstate with the new data
+    pass
+
+def sheets_writer_node(state: JobAppState) -> JobAppState:
+    """Writes the sheets systematically and returns the JobAppState"""
+    # in parallel or batch upsert the job_tracker tab, job_inbox tab, optimized_jobs tab, rejected tab
+    # finally writes the metadata tab to get other ids, get counts, etc. 
+    # verify that data was written correctly by comparing counts to metadata
+    # return the jobappstate with the new data
+    pass

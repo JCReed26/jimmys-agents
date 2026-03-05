@@ -7,8 +7,8 @@
 import csv
 from pathlib import Path
 from jobspy import scrape_jobs
-from .classifier import classifier_agent
-from state import JobDescription
+from nodes.classifier import classifier_agent
+from state import JobDescription, JobAppState
 
 JOB_CSV_PATH = Path('jobs.csv')
 # JobSpy CSV Headers
@@ -93,5 +93,12 @@ class Scraper:
                 response = classifier_agent.invoke(prompt)
                 classified_jobs.append(response)
 
-
-scraper = Scraper()
+def scraper_node(state: JobAppState) -> JobAppState:
+    """Scrapes jobs from jobspy and saves to csv file. Returns len of jobs scraped."""
+    scraper = Scraper()
+    scraper.scrape_jobs(state.search_term, state.location, state.results_wanted, state.hours_old)
+    scraper.clean_data() # TODO: Process data, see if it exists already, if not give it an id and then send to classifier
+    scraper.classify_jobs()
+    state.new_jobs.append(scraper.job_inbox)            # add new jobs to the state to be written to the sheet later (not to be duplicated with another job already in the sheet inbox or optimizer or tracker or rejected)
+    state.rejected_jobs.append(scraper.rejected_jobs)   # adds rejected jobs to the state to be written to the sheet later
+    return state

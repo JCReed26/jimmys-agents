@@ -20,3 +20,11 @@ classifier_agent = create_agent(
     tools=[],
     system_prompt=system_prompt,
 )
+
+def classifier_node(state: JobAppState) -> JobAppState:
+    """Classifies the jobs and returns the JobAppState"""
+    classified_jobs = []
+    for job in state.new_jobs:
+        classified_jobs.append(classifier_agent.invoke(job))
+    state.classified_jobs = classified_jobs
+    return state
