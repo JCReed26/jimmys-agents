@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
-import { AGENTS } from '@/lib/agents';
+import { AGENTS, WORKFLOWS } from '@/lib/agents';
 
 export async function GET() {
   const results: Record<string, any> = {};
+  
+  const allServices = { ...AGENTS, ...WORKFLOWS };
 
-  for (const [key, agent] of Object.entries(AGENTS)) {
+  for (const [key, config] of Object.entries(allServices)) {
     try {
       // Use a short timeout for health checks
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 2000);
       
-      const response = await fetch(`${agent.url}/ok`, { 
+      // We assume config has a url property.
+      // If it doesn't (some older workflow definition), skip or handle
+      if (!(config as any).url) continue;
+
+      const response = await fetch(`${(config as any).url}/ok`, { 
         signal: controller.signal,
         cache: 'no-store'
       });
@@ -25,10 +31,6 @@ export async function GET() {
       results[key] = { status: 'DOWN' };
     }
   }
-
-  // Also include job-app-chain logic if needed, but it's a file-based check in Python.
-  // In Next.js (Node), we can check file existence if running locally.
-  // For now, let's just return the HTTP agents.
 
   return NextResponse.json(results);
 }

@@ -3,7 +3,7 @@ import Link from 'next/link';
 
 interface AgentCardProps {
   name: string;
-  status: 'RUNNING' | 'IDLE' | 'DOWN' | 'ERROR' | 'SHEET';
+  status: 'RUNNING' | 'IDLE' | 'DOWN' | 'ERROR' | 'SHEET' | 'CONNECTED';
   metrics: {
     avgLatency?: string;
     totalRuns?: number;
@@ -23,6 +23,7 @@ export function AgentCard({ name, status, metrics, description, href, icon: Icon
     'DOWN': 'status-down',
     'ERROR': 'status-error',
     'SHEET': 'status-sheet',
+    'CONNECTED': 'status-idle', 
   }[status] || 'status-idle';
 
   return (

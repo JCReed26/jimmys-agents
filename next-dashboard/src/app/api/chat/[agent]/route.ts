@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AGENTS } from '@/lib/agents';
+import { AGENTS, WORKFLOWS } from '@/lib/agents';
 
 export async function POST(
   req: NextRequest,
@@ -8,14 +8,17 @@ export async function POST(
   const { agent } = await params;
   const body = await req.json();
 
-  const agentConfig = AGENTS[agent];
-  if (!agentConfig) {
+  // Check both AGENTS and WORKFLOWS
+  // Casting to any because they might have slightly different shapes, but both have url
+  const config = (AGENTS[agent] || WORKFLOWS[agent as keyof typeof WORKFLOWS]) as any;
+
+  if (!config) {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
   }
 
   // Forward to LangGraph agent
   try {
-    const upstreamUrl = `${agentConfig.url}/runs/stream`;
+    const upstreamUrl = `${config.url}/runs/stream`;
     
     // We need to stream the response back to the client
     const upstreamResponse = await fetch(upstreamUrl, {

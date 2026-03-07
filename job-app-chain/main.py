@@ -1,13 +1,14 @@
 import asyncio
 import json
 import os
+from dotenv import load_dotenv, find_dotenv
+
+load_dotenv(find_dotenv())
 from datetime import datetime
 from pathlib import Path
 from graph import build_graph
 from state import JobAppState
-from dotenv import load_dotenv, find_dotenv
 
-load_dotenv(find_dotenv())
 
 LOG_FILE = os.environ.get("JOB_HISTORY_FILE", "../data/run_history.json")
 

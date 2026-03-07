@@ -1,17 +1,8 @@
 # for jobspy scraper and playwright scraper
 # this file also includes the logic to clean the data and add it to the state for classification
-import csv
-import os
-from pathlib import Path
 from jobspy import scrape_jobs
 from state import JobDescription, JobAppState
-JOB_CSV_PATH = Path(os.getenv("JOB_CSV_PATH", "/app/data/jobs.csv"))
-try:
-    JOB_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-except (PermissionError, OSError):
-    pass
-# JobSpy CSV Headers
-# SITE | TITLE | COMPANY | CITY | STATE | JOB_TYPE | INTERVAL | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | DESCRIPTION
+import pandas as pd
 
 class Scraper:
     def __init__(self):
@@ -20,8 +11,8 @@ class Scraper:
     def _make_google_search(self, search_term: str, location: str):
         return f"{search_term} jobs near {location}, since yesterday"
 
-    def scrape_jobs(self, search_term: str, location: str, results_wanted: int, hours_old: int):
-        """Scrapes jobs from jobspy and saves to csv file. Returns len of jobs scraped."""
+    def scrape_jobs(self, search_term: str, location: str, results_wanted: int, hours_old: int) -> pd.DataFrame:
+        """Scrapes jobs from jobspy and returns a DataFrame."""
         print(f"Scraping jobs for {search_term} in {location}...")
         try:
             jobs = scrape_jobs(
@@ -33,43 +24,42 @@ class Scraper:
                 hours_old=hours_old,
                 country_indeed='USA',
             )
-            if JOB_CSV_PATH.exists():
-                JOB_CSV_PATH.unlink()
-            jobs.to_csv(JOB_CSV_PATH)
             print(f"Scraped {len(jobs)} jobs.")
-            return len(jobs)
+            return jobs
         except Exception as e:
             print(f"Error scraping jobs: {e}")
-            return 0
+            return pd.DataFrame()
 
-    def load_and_clean_data(self):
-        """Loads jobs from CSV and converts them to JobDescription objects."""
+    def clean_data(self, jobs_df: pd.DataFrame):
+        """Converts DataFrame to JobDescription objects."""
         self.scraped_jobs = []
-        if not JOB_CSV_PATH.exists():
+        if jobs_df.empty:
             return []
 
-        with open(JOB_CSV_PATH, 'r') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                # Basic cleaning and mapping to TypedDict
-                job = JobDescription(
-                    site=row.get('site', ''),
-                    title=row.get('title', ''),
-                    company=row.get('company', ''),
-                    city=row.get('city', ''),
-                    state=row.get('state', ''),
-                    job_type=row.get('job_type', ''),
-                    interval=row.get('interval', ''),
-                    min_amount=row.get('min_amount', ''),
-                    max_amount=row.get('max_amount', ''),
-                    job_url=row.get('job_url', ''),
-                    description=row.get('description', ''),
-                )
-                self.scraped_jobs.append(job)
+        # Convert DataFrame to list of dicts
+        records = jobs_df.to_dict('records')
+
+        for row in records:
+            # Basic cleaning and mapping to TypedDict
+            # Ensure all values are strings to match TypedDict definition
+            job = JobDescription(
+                site=str(row.get('site', '')),
+                title=str(row.get('title', '')),
+                company=str(row.get('company', '')),
+                city=str(row.get('city', '')),
+                state=str(row.get('state', '')),
+                job_type=str(row.get('job_type', '')),
+                interval=str(row.get('interval', '')),
+                min_amount=str(row.get('min_amount', '')),
+                max_amount=str(row.get('max_amount', '')),
+                job_url=str(row.get('job_url', '')),
+                description=str(row.get('description', '')),
+            )
+            self.scraped_jobs.append(job)
         return self.scraped_jobs
 
 def scraper_node(state: JobAppState) -> JobAppState:
-    """Scrapes jobs from jobspy and saves to csv file. Returns state with scraped_jobs."""
+    """Scrapes jobs from jobspy and returns state with scraped_jobs."""
     try:
         scraper = Scraper()
 
@@ -78,8 +68,8 @@ def scraper_node(state: JobAppState) -> JobAppState:
         results_wanted = state.get("results_wanted", 5)
         hours_old = state.get("hours_old", 24)
 
-        scraper.scrape_jobs(search_term, location, results_wanted, hours_old)
-        raw_jobs = scraper.load_and_clean_data()
+        jobs_df = scraper.scrape_jobs(search_term, location, results_wanted, hours_old)
+        raw_jobs = scraper.clean_data(jobs_df)
 
         existing_urls = set(state.get("existing_urls", []))
         scraped_jobs = [job for job in raw_jobs if job.get("job_url") not in existing_urls]

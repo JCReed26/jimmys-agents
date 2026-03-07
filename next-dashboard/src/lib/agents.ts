@@ -29,7 +29,7 @@ export const AGENTS: Record<string, AgentConfig> = {
     port: 8003,
     icon: DollarSign,
     description: "Google Sheets budget tracking"
-  },
+  }
 };
 
 export const WORKFLOWS = {
@@ -37,6 +37,8 @@ export const WORKFLOWS = {
     name: "job-app-chain",
     description: "Automated Job Application",
     history_file: "../data/run_history.json",
-    icon: Briefcase
+    icon: Briefcase,
+    url: "http://localhost:8004",
+    port: 8004
   }
 };

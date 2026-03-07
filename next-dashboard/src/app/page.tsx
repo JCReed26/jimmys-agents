@@ -55,7 +55,7 @@ export default function Home() {
           <AgentCard
             key={key}
             name={key}
-            status="IDLE" // Placeholder
+            status={statuses[key]?.status === 'RUNNING' ? 'CONNECTED' : statuses[key]?.status || 'IDLE'}
             description={config.description}
             href={`/workflow/${key}`}
             icon={config.icon}
