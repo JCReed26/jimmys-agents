@@ -1,17 +1,59 @@
 import time
+import sys
+import os
 from datetime import datetime
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_google_community import GmailToolkit
 from langchain_google_genai import ChatGoogleGenerativeAI
 from typing import List
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from models import EmailAnalysis, ActionType
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shared.metrics_callback import MetricsCallback
+from shared.auth import get_google_service
 
-load_dotenv()
+load_dotenv(find_dotenv())
+# Explicitly load from parent directory to ensure it works with langgraph dev
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path, override=True)
 
-toolkit = GmailToolkit()
-tools = toolkit.get_tools()
+# Strip whitespace from API key just in case
+if "GOOGLE_API_KEY" in os.environ:
+    os.environ["GOOGLE_API_KEY"] = os.environ["GOOGLE_API_KEY"].strip()
+
+print(f"DEBUG: .env path: {env_path}")
+print(f"DEBUG: GOOGLE_API_KEY present: {'GOOGLE_API_KEY' in os.environ}")
+
+_NOT_CONNECTED = "Gmail not connected. Click 'Connect' in the dashboard, then restart this agent."
+_SCOPES = ["https://mail.google.com/"]
+_TOKEN_PATH = os.environ.get("GMAIL_TOKEN_PATH", "../secrets/gmail_token.json")
+_CREDS_PATH = os.environ.get("CREDENTIALS_PATH", "../secrets/credentials.json")
+
+_gmail_api = None
+try:
+    _gmail_api = get_google_service(
+        scopes=_SCOPES,
+        token_path=_TOKEN_PATH,
+        credentials_path=_CREDS_PATH,
+        service_name="gmail",
+        service_version="v1",
+    )
+    toolkit = GmailToolkit(api_resource=_gmail_api)
+    tools = toolkit.get_tools()
+    print("Gmail connected.")
+except Exception as e:
+    print(f"Gmail not authenticated ({e}). Starting in disconnected mode.")
+    toolkit = None
+
+    @tool
+    def gmail_not_connected(query: str = "") -> str:
+        """Gmail not connected — connect via the dashboard to enable email tools."""
+        return _NOT_CONNECTED
+
+    tools = [gmail_not_connected]
+
 
 @tool
 def format_email_output(list_of_emails: List[EmailAnalysis]) -> str:
@@ -32,13 +74,11 @@ def format_email_output(list_of_emails: List[EmailAnalysis]) -> str:
 @tool
 def mark_emails_as_read(email_ids: List[str]) -> str:
     """Marks a list of email IDs as read by removing the 'UNREAD' label."""
+    if _gmail_api is None:
+        return _NOT_CONNECTED
     try:
-        service = toolkit.api_resource
-        body = {
-            'ids': email_ids,
-            'removeLabelIds': ['UNREAD']
-        }
-        service.users().messages().batchModify(userId='me', body=body).execute()
+        body = {'ids': email_ids, 'removeLabelIds': ['UNREAD']}
+        _gmail_api.users().messages().batchModify(userId='me', body=body).execute()
         return f"Successfully marked {len(email_ids)} emails as read."
     except Exception as e:
         return f"Error marking emails as read: {str(e)}"
@@ -70,19 +110,22 @@ Your goal is to manage the user's inbox proactively.
 
 Do not output raw tool arguments. Only output the final formatted report."""
 
-agent_executor = create_agent(
-    model=llm, 
-    tools=tools, 
-    system_prompt=system_prompt
-    )
+agent = create_agent(
+    model=llm,
+    tools=tools,
+    system_prompt=system_prompt,
+)
+
+metrics_cb = MetricsCallback(agent_name="gmail-agent")
 
 def run_agent_cycle():
     print(f"\n--- Starting Polling Cycle: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
 
     query = "Search my inbox for the latest emails, analyze them, and format the output."
 
-    events = agent_executor.stream(
+    events = agent.stream(
         {"messages": [("user", query)]},
+        config={"callbacks": [metrics_cb]},
         stream_mode="values",
     )
     for event in events:

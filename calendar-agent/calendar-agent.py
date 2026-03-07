@@ -2,13 +2,11 @@ import os
 import datetime
 from datetime import timedelta
 from typing import List, Dict, Optional
-from dotenv import load_dotenv
-
-# Google Auth & API Imports
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
+from dotenv import load_dotenv, find_dotenv
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from shared.auth import get_google_service
+from shared.metrics_callback import MetricsCallback
 
 # LangChain Imports
 from langchain.agents import create_agent
@@ -16,69 +14,37 @@ from langchain.tools import tool
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import InMemorySaver
 
-load_dotenv()
+load_dotenv(find_dotenv())
+# Explicitly load from parent directory to ensure it works with langgraph dev
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path, override=True)
+
+# Strip whitespace from API key just in case
+if "GOOGLE_API_KEY" in os.environ:
+    os.environ["GOOGLE_API_KEY"] = os.environ["GOOGLE_API_KEY"].strip()
+
+print(f"DEBUG: .env path: {env_path}")
+print(f"DEBUG: GOOGLE_API_KEY present: {'GOOGLE_API_KEY' in os.environ}")
 
 # --- 1. AUTHENTICATION & SETUP ---
 
-# We use a separate token file to avoid conflicts with your Gmail agent
-SCOPES = ['https://www.googleapis.com/auth/calendar']
-TOKEN_FILE = 'calendar_token.json'
-CREDENTIALS_FILE = '../credentials.json' # Assumes running from calendar-agent/ or adjust path
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-def get_calendar_service():
-    """Authenticates and returns the Google Calendar API service."""
-    creds = None
-    
-    # Adjust path if running from root vs folder
-    token_path = TOKEN_FILE
-    if not os.path.exists(token_path) and os.path.exists(f"calendar-agent/{TOKEN_FILE}"):
-        token_path = f"calendar-agent/{TOKEN_FILE}"
-        
-    creds_path = CREDENTIALS_FILE
-    if not os.path.exists(creds_path):
-        # Try looking in current dir or root
-        if os.path.exists("credentials.json"):
-            creds_path = "credentials.json"
-        elif os.path.exists("../credentials.json"):
-             creds_path = "../credentials.json"
+_NOT_CONNECTED = "Calendar not connected. Click 'Connect' in the dashboard, then restart this agent."
 
-    # 1. Try to load existing token
-    if os.path.exists(token_path):
-        try:
-            creds = Credentials.from_authorized_user_file(token_path, SCOPES)
-        except Exception:
-            print("Corrupt token file, re-authenticating...")
-            creds = None
-
-    # 2. Refresh or Login if needed
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            try:
-                creds.refresh(Request())
-            except Exception:
-                print("Token refresh failed, re-authenticating...")
-                creds = None
-        
-        if not creds:
-            if not os.path.exists(creds_path):
-                raise FileNotFoundError(f"Missing credentials.json at {creds_path}. Please download it from Google Cloud Console.")
-                
-            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
-            creds = flow.run_local_server(port=0)
-        
-        # Save the new token
-        with open(token_path, 'w') as token:
-            token.write(creds.to_json())
-
-    return build('calendar', 'v3', credentials=creds)
-
-# Initialize Service
+calendar_service = None
 try:
-    calendar_service = get_calendar_service()
+    calendar_service = get_google_service(
+        scopes=SCOPES,
+        token_path=os.environ.get("CALENDAR_TOKEN_PATH", "../secrets/calendar_token.json"),
+        credentials_path=os.environ.get("CREDENTIALS_PATH", "../secrets/credentials.json"),
+        service_name="calendar",
+        service_version="v3",
+    )
     print("Successfully connected to Google Calendar API")
 except Exception as e:
-    print(f"Failed to connect to Calendar API: {e}")
-    exit(1)
+    print(f"Calendar not authenticated ({e}). Starting in disconnected mode.")
 
 # --- 2. CUSTOM TOOLS (The "Full Overview" Capability) ---
 
@@ -95,6 +61,8 @@ def get_current_datetime():
 @tool
 def list_calendars():
     """List all calendars the user has access to."""
+    if calendar_service is None:
+        return _NOT_CONNECTED
     try:
         calendars = calendar_service.calendarList().list().execute()
         return [
@@ -109,11 +77,13 @@ def get_detailed_agenda(days: int = 7, calendar_id: str = 'primary'):
     """
     Get a detailed list of events for the next N days.
     Crucial for checking conflicts before scheduling.
-    
+
     Args:
         days: Number of days to look ahead (default 7)
         calendar_id: The calendar to check (default 'primary')
     """
+    if calendar_service is None:
+        return _NOT_CONNECTED
     try:
         now = datetime.datetime.now().astimezone()
         end = now + timedelta(days=days)
@@ -149,7 +119,7 @@ def get_detailed_agenda(days: int = 7, calendar_id: str = 'primary'):
 def create_calendar_event(summary: str, start_time: str, end_time: str, description: str = "", calendar_id: str = 'primary'):
     """
     Create a new calendar event.
-    
+
     Args:
         summary: Title of the event
         start_time: ISO format string (e.g., '2023-10-27T10:00:00-07:00')
@@ -157,6 +127,8 @@ def create_calendar_event(summary: str, start_time: str, end_time: str, descript
         description: Details about the event
         calendar_id: Default 'primary'
     """
+    if calendar_service is None:
+        return _NOT_CONNECTED
     try:
         event = {
             'summary': summary,
@@ -172,6 +144,8 @@ def create_calendar_event(summary: str, start_time: str, end_time: str, descript
 @tool
 def update_calendar_event(event_id: str, summary: str = None, start_time: str = None, end_time: str = None, calendar_id: str = 'primary'):
     """Update an existing event. You must get the event_id from 'get_detailed_agenda' first."""
+    if calendar_service is None:
+        return _NOT_CONNECTED
     try:
         # First retrieve the event to preserve other fields
         event = calendar_service.events().get(calendarId=calendar_id, eventId=event_id).execute()
@@ -191,6 +165,8 @@ def update_calendar_event(event_id: str, summary: str = None, start_time: str = 
 @tool
 def delete_calendar_event(event_id: str, calendar_id: str = 'primary'):
     """Delete an event. Use with caution."""
+    if calendar_service is None:
+        return _NOT_CONNECTED
     try:
         calendar_service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
         return "Event deleted successfully."
@@ -224,7 +200,12 @@ You have full scope over the user's schedule. Your goal is to manage time effect
 """
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
-agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt, checkpointer=InMemorySaver())
+# agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt, checkpointer=InMemorySaver())
+# For LangGraph API (langgraph dev), we must NOT pass a checkpointer
+print(f"DEBUG: Initializing agent with tools: {[t.name for t in tools]}")
+agent = create_agent(model=llm, tools=tools, system_prompt=system_prompt)
+print("DEBUG: Agent initialized successfully")
+metrics_cb = MetricsCallback(agent_name="calendar-agent")
 
 # --- 4. INTERACTIVE LOOP ---
 
@@ -242,7 +223,7 @@ def run_chat_loop():
                 
             result = agent.invoke(
                 {"messages": [("user", user_input)]},
-                {"configurable": {"thread_id": thread_id}}
+                {"configurable": {"thread_id": thread_id}, "callbacks": [metrics_cb]}
             )
             
             # Print the final response
