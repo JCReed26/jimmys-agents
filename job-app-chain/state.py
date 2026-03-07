@@ -1,5 +1,5 @@
 from operator import add
-from typing import TypedDict, List, Annotated
+from typing import TypedDict, List, Annotated, Optional
 from enum import Enum
 
 # JobSpy Returned table --> must match job description for classification after that it becomes an application before hitting job_inbox
@@ -21,7 +21,7 @@ class RejectedJob(JobDescription):
     rejected_reason: str
     rejected_date: str
 
-class JobInboxItem(Enum):
+class JobInboxStatus(Enum):
     NEW = "new" # default state set by ai
     APPROVED = "approved" # approved by jimmy to go to optimization process
     REJECTED = "rejected" # rejected by jimmy to go to rejected tab
@@ -29,10 +29,10 @@ class JobInboxItem(Enum):
 class JobInboxItem(JobDescription):
     classification: str
     reasoning: str
-    inbox_status: JobInboxItem = JobInboxItem.NEW
+    inbox_status: JobInboxStatus = JobInboxStatus.NEW
     found_date: str
 
-class OptimizedItem(Enum):
+class OptimizedStatus(Enum):
     NEW = "new" # default state set by ai
     APPROVED = "approved" # approved by jimmy to go to tracker aka applied for the job
     REJECTED = "rejected" # rejected by jimmy to go to rejected tab aka decided against applying for the job
@@ -41,10 +41,11 @@ class OptimizedJob(JobInboxItem):
     resume_url: str
     cover_letter_url: str
     reasoning: str
-    optimized_status: OptimizedItem = OptimizedItem.NEW
+    research_brief: str
+    optimized_status: OptimizedStatus = OptimizedStatus.NEW
     optimized_date: str
 
-class TrackedItem(Enum):
+class TrackedStatus(Enum):
     APPLIED = "applied"                     # applied for the job default state
     REJECTED = "rejected"                   # rejected by company after applying for the job
     GHOSTED = "ghosted"                     # no contact from company after applying
@@ -56,15 +57,29 @@ class TrackedItem(Enum):
     OFFER_EXPIRED = "offer_expired"         # offer expired by the company
 
 class TrackedJob(OptimizedJob):
-    tracked_status: TrackedItem = TrackedItem.APPLIED
+    tracked_status: TrackedStatus = TrackedStatus.APPLIED
     applied_date: str
 
 class JobAppState(TypedDict):
+    # Input parameters
+    search_term: str
+    location: str
+    results_wanted: int
+    hours_old: int
+    
+    # State lists
+    scraped_jobs: Annotated[List[JobDescription], add]
     new_jobs: Annotated[List[JobInboxItem], add]
     approved_jobs: Annotated[List[JobInboxItem], add]
     optimized_jobs: Annotated[List[OptimizedJob], add]
     rejected_jobs: Annotated[List[RejectedJob | JobInboxItem | OptimizedJob], add]
     tracked_jobs: Annotated[List[TrackedJob], add]
+    
+    # Internal state for deduplication
+    existing_urls: List[str]
+
+    # Error propagation — set by nodes on failure so writer can still unlock
+    error_message: Optional[str]
 
 """
 All of these will correspond to an id in a local sqlite database for each job so that no matter where the job is in the workflow or sheet all data can be queried if needed.

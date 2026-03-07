@@ -1,30 +1,70 @@
-from langchain.agents import create_agent
-from langchain.tools import tool
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
-from state import Job
-from dotenv import load_dotenv
-load_dotenv()
+from datetime import datetime
+from state import JobAppState, JobInboxItem, JobInboxStatus
+import json
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+# Initialize LLM
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
-# sequentially call the tools to grade, reason, and classify the job
-
-system_prompt = """
-You are a technical recruiter and personal friend of the user who you are helping with their job search.
-You will be given a list of job descriptions with the following fields:
-{JobDescription.model_json_schema().schema_json(indent=2)}
-"""
-
-classifier_agent = create_agent(
-    model=llm,
-    tools=[],
-    system_prompt=system_prompt,
+# Define the classification prompt
+classification_prompt = ChatPromptTemplate.from_template(
+    """
+    You are a technical recruiter and personal friend of the user who you are helping with their job search.
+    Please classify the following job as 'approved' (should apply) or 'rejected' (should not apply).
+    
+    User Preferences:
+    - Role: Software Engineer, Full Stack Developer, AI Engineer
+    - Location: Remote or Hybrid (if close to user's location)
+    - Salary: Competitive
+    - Tech Stack: Python, TypeScript, React, Node.js, AI/ML
+    
+    Job Description:
+    {job_description}
+    
+    Return the classification in the following JSON format:
+    {{
+        "classification": "approved" | "rejected",
+        "reasoning": "brief explanation for the classification"
+    }}
+    """
 )
 
+# Create the chain
+classification_chain = classification_prompt | llm | JsonOutputParser()
+
 def classifier_node(state: JobAppState) -> JobAppState:
-    """Classifies the jobs and returns the JobAppState"""
-    classified_jobs = []
-    for job in state.new_jobs:
-        classified_jobs.append(classifier_agent.invoke(job))
-    state.classified_jobs = classified_jobs
-    return state
+    """Classifies the scraped jobs and returns the JobAppState with new_jobs."""
+    print("--- Classifier Node ---")
+    try:
+        scraped_jobs = state.get("scraped_jobs", [])
+        new_jobs = []
+
+        print(f"Classifying {len(scraped_jobs)} jobs...")
+
+        for job in scraped_jobs:
+            try:
+                job_str = json.dumps(job, indent=2)
+                result = classification_chain.invoke({"job_description": job_str})
+
+                classification = result.get("classification", "rejected").lower()
+                reasoning = result.get("reasoning", "No reasoning provided.")
+
+                inbox_item = JobInboxItem(
+                    **job,
+                    classification=classification,
+                    reasoning=reasoning,
+                    inbox_status=JobInboxStatus.NEW,
+                    found_date=datetime.now().strftime("%Y-%m-%d")
+                )
+                new_jobs.append(inbox_item)
+                print(f"Classified: {job.get('title', 'Unknown')} -> {classification}")
+            except Exception as e:
+                print(f"Error classifying job {job.get('title', 'Unknown')}: {e}")
+                continue
+
+        return {"new_jobs": new_jobs}
+    except Exception as e:
+        print(f"Classifier node failed: {e}")
+        return {"new_jobs": [], "error_message": f"classifier_node: {e}"}

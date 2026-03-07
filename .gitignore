@@ -18,4 +18,7 @@ progress.md
 # Test artifacts
 .pytest_cache/
 *.pyc
-tests/**/__pycache__/
+
+# Logs
+*.log
+logs/

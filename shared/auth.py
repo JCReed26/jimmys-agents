@@ -42,7 +42,14 @@ def get_google_service(
                     "Download it from Google Cloud Console."
                 )
             flow = InstalledAppFlow.from_client_secrets_file(credentials_path, scopes)
-            creds = flow.run_local_server(port=0)
+            try:
+                creds = flow.run_local_server(port=0)
+            except Exception as browser_err:
+                raise RuntimeError(
+                    f"No valid OAuth token found at {token_path} and cannot open a browser "
+                    f"({browser_err}). Run 'python shared/run_auth.py' locally to generate "
+                    "tokens, then rebuild the container."
+                ) from browser_err
 
         with open(token_path, "w") as f:
             f.write(creds.to_json())

@@ -22,12 +22,26 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.prebuilt import ToolNode
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
+# Explicitly load from parent directory to ensure it works with langgraph dev
+env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+if os.path.exists(env_path):
+    load_dotenv(env_path, override=True)
+
+# Strip whitespace from API key just in case
+if "GOOGLE_API_KEY" in os.environ:
+    os.environ["GOOGLE_API_KEY"] = os.environ["GOOGLE_API_KEY"].strip()
+
+print(f"DEBUG: .env path: {env_path}")
+print(f"DEBUG: GOOGLE_API_KEY present: {'GOOGLE_API_KEY' in os.environ}")
+if 'GOOGLE_API_KEY' in os.environ:
+    print(f"DEBUG: GOOGLE_API_KEY prefix: {os.environ['GOOGLE_API_KEY'][:5]}")
+    print(f"DEBUG: GOOGLE_API_KEY length: {len(os.environ['GOOGLE_API_KEY'])}")
 
 # Config
-STATE_FILE = "/app/data/budget_state.json"
+STATE_FILE = os.environ.get("BUDGET_STATE_FILE", "../data/budget_state.json")
 
 # State Manager for Budget Agent
 class BudgetManager:
@@ -212,8 +226,8 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 try:
     service = get_google_service(
         scopes=SCOPES,
-        token_path="/app/secrets/sheets_token.json",
-        credentials_path="/app/secrets/credentials.json",
+        token_path=os.environ.get("SHEETS_TOKEN_PATH", "../secrets/sheets_token.json"),
+        credentials_path=os.environ.get("CREDENTIALS_PATH", "../secrets/credentials.json"),
         service_name="sheets",
         service_version="v4",
     )
@@ -226,8 +240,17 @@ try:
     else:
         print("[System] No existing budget found.")
 except Exception as e:
-    print(f"Failed to initialize: {e}")
-    exit(1)
+    print(f"Sheets not authenticated ({e}). Starting in disconnected mode.")
+    service = None
+    toolkit = None
+    manager = None
+
+    @tool
+    def sheets_not_connected(query: str = "") -> str:
+        """Budget tools not connected — connect via the dashboard to enable budget tools."""
+        return "Sheets not connected. Click 'Connect' in the dashboard, then restart this agent."
+
+    tools = [sheets_not_connected]
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.0)
 llm_with_tools = llm.bind_tools(tools)
@@ -239,15 +262,18 @@ def llm_call(state: dict):
     """LLM Decides whether to call a tool or not"""
     # Dynamic System Prompt Injection
     current_prompt = BASE_SYSTEM_PROMPT
-    if manager.spreadsheet_id:
+    if manager and manager.spreadsheet_id:
         current_prompt += f"\n\n### CURRENT STATE (LIVE CACHE)\n- **Spreadsheet ID:** {manager.spreadsheet_id}\n- **Known Sheets:** {manager.sheet_names}\nUse this metadata to avoid guessing sheet names."
 
-    response = llm_with_tools.invoke(
-        [SystemMessage(content=current_prompt)] + state["messages"]
-    )
-    return {
-        "messages": [response]
-    }
+    try:
+        response = llm_with_tools.invoke(
+            [SystemMessage(content=current_prompt)] + state["messages"]
+        )
+        return {
+            "messages": [response]
+        }
+    except Exception as e:
+        raise e
 
 tool_node = ToolNode(tools)
 
@@ -276,7 +302,9 @@ agent_builder.add_conditional_edges(
 agent_builder.add_edge("tool_node", "llm_call")
 
 memory = InMemorySaver()
-agent = agent_builder.compile(checkpointer=memory)
+# agent = agent_builder.compile(checkpointer=memory)
+# For LangGraph API (langgraph dev), we must NOT pass a checkpointer
+agent = agent_builder.compile()
 
 if __name__ == "__main__":
     print("Starting Budget Agent with Smart Metadata Manager...")

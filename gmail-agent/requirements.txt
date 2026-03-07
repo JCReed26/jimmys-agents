@@ -1,8 +1,0 @@
-langchain>=1.0
-langgraph>=0.2
-langgraph-cli[inmem]>=0.1
-langchain-google-genai>=2.0
-langchain-google-community[gmail]>=2.0
-google-auth-oauthlib>=1.2
-python-dotenv>=1.0
-langsmith>=0.1

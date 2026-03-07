@@ -1,104 +1,91 @@
-# TODO: update this file to clean up the code and make it more readable and maintainable
-# TODO: add tests and error handling, debug till passing tests
-# TODO: add logging, tracking, and metrics tracking
-
 # for jobspy scraper and playwright scraper
 # this file also includes the logic to clean the data and add it to the state for classification
 import csv
+import os
 from pathlib import Path
 from jobspy import scrape_jobs
-from nodes.classifier import classifier_agent
 from state import JobDescription, JobAppState
-
-JOB_CSV_PATH = Path('jobs.csv')
+JOB_CSV_PATH = Path(os.getenv("JOB_CSV_PATH", "/app/data/jobs.csv"))
+try:
+    JOB_CSV_PATH.parent.mkdir(parents=True, exist_ok=True)
+except (PermissionError, OSError):
+    pass
 # JobSpy CSV Headers
 # SITE | TITLE | COMPANY | CITY | STATE | JOB_TYPE | INTERVAL | MIN_AMOUNT | MAX_AMOUNT | JOB_URL | DESCRIPTION
 
 class Scraper:
     def __init__(self):
-        self.jobs = []
-        self.rejected_jobs = []
-        self.job_inbox = []
+        self.scraped_jobs: list[JobDescription] = []
 
     def _make_google_search(self, search_term: str, location: str):
         return f"{search_term} jobs near {location}, since yesterday"
 
     def scrape_jobs(self, search_term: str, location: str, results_wanted: int, hours_old: int):
         """Scrapes jobs from jobspy and saves to csv file. Returns len of jobs scraped."""
-        jobs = scrape_jobs(
-            site_name=["indeed", "ziprecruiter", "glassdoor", "google"],
-            search_term=search_term,
-            google_search_term=_make_google_search(search_term, location),
-            location=location,
-            results_wanted=results_wanted,
-            hours_old=hours_old,
-            country_indeed='USA',
+        print(f"Scraping jobs for {search_term} in {location}...")
+        try:
+            jobs = scrape_jobs(
+                site_name=["indeed", "ziprecruiter", "glassdoor", "google"],
+                search_term=search_term,
+                google_search_term=self._make_google_search(search_term, location),
+                location=location,
+                results_wanted=results_wanted,
+                hours_old=hours_old,
+                country_indeed='USA',
+            )
+            if JOB_CSV_PATH.exists():
+                JOB_CSV_PATH.unlink()
+            jobs.to_csv(JOB_CSV_PATH)
+            print(f"Scraped {len(jobs)} jobs.")
+            return len(jobs)
+        except Exception as e:
+            print(f"Error scraping jobs: {e}")
+            return 0
 
-            
-        )
-        if JOB_CSV_PATH.exists():
-            JOB_CSV_PATH.unlink()
-        jobs.to_csv(JOB_CSV_PATH)
-
-        return len(jobs)
-
-    def clean_data(self):
-        """ does multiple things to the jobs.csv
-        1. Removes rejected jobs from the csv, puts in rejected list
-        2. Takes approved jobs transforms them into JobApplications and puts in job_inbox list
-        3. returns the lists for each of the above rejected, job_inbox
-        """
-        return self.rejected_jobs, self.job_inbox
-
-
-    def _create_job_classification_prompt(self, job: JobDescription) -> str:
-        return f"""
-        Please classify the following job as approved(should apply) or rejected(should not apply).
-
-        Job Description: {job.model_dump_json(indent=2)}
-
-        Return the classification in the following format:
-        {{
-            "classification": "approved" | "rejected",
-            "reasoning": "brief explanation for the classification"
-        }}
-        """
-
-    def classify_jobs(self):
-        """Sends each job in batches to the classifier agent to grade the job and classify it as approved or rejected
-        
-        Returns a list of dicts with the following keys: classification, reasoning
-        
-        These line up with the Jobs in the csv file."""
-
-        classified_jobs = [] # list of dicts with the following keys: classification, reasoning
+    def load_and_clean_data(self):
+        """Loads jobs from CSV and converts them to JobDescription objects."""
+        self.scraped_jobs = []
+        if not JOB_CSV_PATH.exists():
+            return []
 
         with open(JOB_CSV_PATH, 'r') as file:
             reader = csv.DictReader(file)
-            for row in reader: 
+            for row in reader:
+                # Basic cleaning and mapping to TypedDict
                 job = JobDescription(
-                    site=row['SITE'],
-                    title=row['TITLE'],
-                    company=row['COMPANY'],
-                    city=row['CITY'],
-                    state=row['STATE'],
-                    job_type=row['JOB_TYPE'],
-                    interval=row['INTERVAL'],
-                    min_amount=row['MIN_AMOUNT'],
-                    max_amount=row['MAX_AMOUNT'],
-                    job_url=row['JOB_URL'],
-                    description=row['DESCRIPTION'],
+                    site=row.get('site', ''),
+                    title=row.get('title', ''),
+                    company=row.get('company', ''),
+                    city=row.get('city', ''),
+                    state=row.get('state', ''),
+                    job_type=row.get('job_type', ''),
+                    interval=row.get('interval', ''),
+                    min_amount=row.get('min_amount', ''),
+                    max_amount=row.get('max_amount', ''),
+                    job_url=row.get('job_url', ''),
+                    description=row.get('description', ''),
                 )
-                prompt = self._create_job_classification_prompt(job)
-                response = classifier_agent.invoke(prompt)
-                classified_jobs.append(response)
+                self.scraped_jobs.append(job)
+        return self.scraped_jobs
 
 def scraper_node(state: JobAppState) -> JobAppState:
-    """Scrapes jobs from jobspy and saves to csv file. Returns len of jobs scraped."""
-    scraper = Scraper()
-    scraper.scrape_jobs(state.search_term, state.location, state.results_wanted, state.hours_old)
-    scraper.clean_data() # TODO: Process data, see if it exists already, if not give it an id and then send to classifier
-    scraper.classify_jobs()
-    state.new_jobs.append(scraper.job_inbox)            # add new jobs to the state to be written to the sheet later (not to be duplicated with another job already in the sheet inbox or optimizer or tracker or rejected)
-    state.rejected_jobs.append(scraper.rejected_jobs)   # adds rejected jobs to the state to be written to the sheet later
-    return state
+    """Scrapes jobs from jobspy and saves to csv file. Returns state with scraped_jobs."""
+    try:
+        scraper = Scraper()
+
+        search_term = state.get("search_term", "software engineer")
+        location = state.get("location", "remote")
+        results_wanted = state.get("results_wanted", 5)
+        hours_old = state.get("hours_old", 24)
+
+        scraper.scrape_jobs(search_term, location, results_wanted, hours_old)
+        raw_jobs = scraper.load_and_clean_data()
+
+        existing_urls = set(state.get("existing_urls", []))
+        scraped_jobs = [job for job in raw_jobs if job.get("job_url") not in existing_urls]
+
+        print(f"Filtered {len(raw_jobs) - len(scraped_jobs)} duplicate jobs.")
+        return {"scraped_jobs": scraped_jobs}
+    except Exception as e:
+        print(f"Scraper node failed: {e}")
+        return {"scraped_jobs": [], "error_message": f"scraper_node: {e}"}

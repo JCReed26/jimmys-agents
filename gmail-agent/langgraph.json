@@ -1,6 +1,6 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "agent": "./gmail-agent.py:agent_executor"
+    "agent": "./gmail-agent.py:agent"
   }
 }

@@ -1,6 +1,0 @@
-{
-  "dependencies": ["."],
-  "graphs": {
-    "agent": "./ticktick-agent.py:agent"
-  }
-}
