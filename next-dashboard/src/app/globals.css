@@ -1,47 +1,92 @@
 @import "tailwindcss";
 
 :root {
-  --bg-base:    #0d0d0d;
-  --bg-surface: #141414;
-  --bg-card:    #1a1a1a;
-  --bg-hover:   #222222;
-  --border:     #2a2a2a;
-  --border-accent: #333333;
+  /* Base surfaces */
+  --bg-base:    #080808;
+  --bg-surface: #0f0f0f;
+  --bg-card:    #141414;
+  --bg-glass:   rgba(20, 20, 20, 0.7);
+  --bg-hover:   #1c1c1c;
+  --bg-overlay: rgba(0, 0, 0, 0.8);
 
+  /* Borders */
+  --border:         #1e1e1e;
+  --border-accent:  #2a2a2a;
+  --border-subtle:  #161616;
+
+  /* Text */
   --text-primary:   #e8e8e8;
   --text-secondary: #888888;
-  --text-dim:       #555555;
+  --text-dim:       #444444;
+  --text-muted:     #333333;
 
+  /* Agent accent colors (neon) */
+  --agent-gmail:    #00ff88;
+  --agent-calendar: #00d4ff;
+  --agent-budget:   #a855f7;
+  --agent-job:      #f59e0b;
+  --agent-default:  #00d4ff;
+
+  /* Semantic colors */
   --green:   #00ff88;
   --cyan:    #00d4ff;
-  --violet:  #7c6af7;
+  --violet:  #a855f7;
+  --amber:   #f59e0b;
   --red:     #ff4444;
   --yellow:  #ffcc00;
+  --orange:  #ff7700;
 
-  --radius: 4px;
+  /* Radius */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-lg: 10px;
 }
 
 @theme inline {
   --color-background: var(--bg-base);
   --color-foreground: var(--text-primary);
-  
-  --color-surface: var(--bg-surface);
-  --color-card: var(--bg-card);
-  --color-hover: var(--bg-hover);
-  --color-border: var(--border);
-  --color-border-accent: var(--border-accent);
 
-  --color-primary: var(--text-primary);
-  --color-secondary: var(--text-secondary);
-  --color-dim: var(--text-dim);
+  --color-surface:        var(--bg-surface);
+  --color-card:           var(--bg-card);
+  --color-glass:          var(--bg-glass);
+  --color-hover:          var(--bg-hover);
+  --color-overlay:        var(--bg-overlay);
+  --color-border:         var(--border);
+  --color-border-accent:  var(--border-accent);
+  --color-border-subtle:  var(--border-subtle);
 
-  --color-accent-green: var(--green);
-  --color-accent-cyan: var(--cyan);
-  --color-accent-violet: var(--violet);
-  --color-accent-red: var(--red);
-  --color-accent-yellow: var(--yellow);
+  --color-primary:    var(--text-primary);
+  --color-secondary:  var(--text-secondary);
+  --color-dim:        var(--text-dim);
+  --color-muted:      var(--text-muted);
+
+  --color-accent-green:   var(--green);
+  --color-accent-cyan:    var(--cyan);
+  --color-accent-violet:  var(--violet);
+  --color-accent-amber:   var(--amber);
+  --color-accent-red:     var(--red);
+  --color-accent-yellow:  var(--yellow);
+  --color-accent-orange:  var(--orange);
+
+  --color-agent-gmail:    var(--agent-gmail);
+  --color-agent-calendar: var(--agent-calendar);
+  --color-agent-budget:   var(--agent-budget);
+  --color-agent-job:      var(--agent-job);
+  --color-agent-default:  var(--agent-default);
 
   --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+  --font-sans: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 body {
@@ -52,19 +97,333 @@ body {
   line-height: 1.6;
 }
 
-@layer base {
-  * {
-    @apply border-border;
-  }
+/* ─────────────────────────────────────────
+   Scrollbar
+   ───────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-accent); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ─────────────────────────────────────────
+   Glass card base
+   ───────────────────────────────────────── */
+.glass {
+  background: var(--bg-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
-/* Custom utilities matching main.css */
+/* ─────────────────────────────────────────
+   Agent neon glow helpers (CSS vars injected per-card)
+   ───────────────────────────────────────── */
+.agent-glow {
+  box-shadow: 0 0 0 1px var(--agent-color, var(--agent-default));
+  border-color: var(--agent-color, var(--agent-default)) !important;
+  transition: box-shadow 0.3s ease;
+}
+
+.agent-glow-subtle {
+  box-shadow: 0 0 12px rgba(var(--agent-color-rgb, 0, 212, 255), 0.08);
+  border-color: color-mix(in srgb, var(--agent-color, var(--agent-default)) 30%, var(--border)) !important;
+  transition: all 0.3s ease;
+}
+
+.agent-glow-hover:hover {
+  box-shadow: 0 0 20px rgba(var(--agent-color-rgb, 0, 212, 255), 0.15);
+  border-color: var(--agent-color, var(--agent-default)) !important;
+}
+
+/* ─────────────────────────────────────────
+   Status badges
+   ───────────────────────────────────────── */
 .status-badge {
-  @apply text-[10px] font-medium px-2 py-0.5 rounded-[2px] tracking-wider border;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 3px;
+  border: 1px solid;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 
-.status-running { @apply text-accent-green border-accent-green; }
-.status-idle    { @apply text-secondary border-border; }
-.status-down    { @apply text-accent-red border-accent-red; }
-.status-error   { @apply text-accent-yellow border-accent-yellow; }
-.status-sheet   { @apply text-accent-violet border-accent-violet; }
+.status-running  { color: var(--green);  border-color: var(--green);  }
+.status-sleeping { color: var(--text-dim); border-color: var(--border-accent); }
+.status-idle     { color: var(--text-secondary); border-color: var(--border); }
+.status-down     { color: var(--red);    border-color: var(--red);    }
+.status-error    { color: var(--yellow); border-color: var(--yellow); }
+.status-sheet    { color: var(--violet); border-color: var(--violet); }
+.status-connected { color: var(--cyan);  border-color: var(--cyan);   }
+
+/* ─────────────────────────────────────────
+   Pulsing dot indicator
+   ───────────────────────────────────────── */
+.pulse-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pulse-dot.active {
+  animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+.pulse-dot.sleeping {
+  animation: breathe 3s ease-in-out infinite;
+  opacity: 0.4;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.7; }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.1); }
+}
+
+/* ─────────────────────────────────────────
+   Sleeping shimmer animation
+   ───────────────────────────────────────── */
+@keyframes sleep-breathe {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.75; }
+}
+
+.sleep-breathe {
+  animation: sleep-breathe 3s ease-in-out infinite;
+}
+
+/* ─────────────────────────────────────────
+   Neon border shimmer for active agents
+   ───────────────────────────────────────── */
+@keyframes border-shimmer {
+  0%   { box-shadow: 0 0 8px rgba(var(--agent-color-rgb, 0,212,255), 0.3); }
+  50%  { box-shadow: 0 0 20px rgba(var(--agent-color-rgb, 0,212,255), 0.5), 0 0 40px rgba(var(--agent-color-rgb, 0,212,255), 0.15); }
+  100% { box-shadow: 0 0 8px rgba(var(--agent-color-rgb, 0,212,255), 0.3); }
+}
+
+.active-glow {
+  animation: border-shimmer 2s ease-in-out infinite;
+}
+
+/* ─────────────────────────────────────────
+   HITL badge notification
+   ───────────────────────────────────────── */
+.hitl-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid var(--bg-base);
+}
+
+/* ─────────────────────────────────────────
+   Tool call card
+   ───────────────────────────────────────── */
+.tool-call-card {
+  background: rgba(0, 212, 255, 0.04);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-left: 2px solid var(--cyan);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 11px;
+}
+
+.thought-bubble {
+  background: rgba(168, 85, 247, 0.04);
+  border: 1px solid rgba(168, 85, 247, 0.12);
+  border-left: 2px solid var(--violet);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+/* ─────────────────────────────────────────
+   Markdown content
+   ───────────────────────────────────────── */
+.prose-dark h1, .prose-dark h2, .prose-dark h3 {
+  color: var(--text-primary);
+  margin: 1em 0 0.5em;
+}
+.prose-dark p { color: var(--text-secondary); margin: 0.5em 0; }
+.prose-dark code {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+}
+.prose-dark pre {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 11px;
+}
+.prose-dark ul, .prose-dark ol {
+  padding-left: 1.5em;
+  color: var(--text-secondary);
+}
+.prose-dark li { margin: 0.25em 0; }
+.prose-dark hr { border-color: var(--border); margin: 1em 0; }
+
+/* ─────────────────────────────────────────
+   Button base
+   ───────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.02em;
+}
+
+.btn-primary {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.btn-primary:hover { background: var(--border-accent); border-color: var(--border-accent); }
+
+.btn-approve {
+  color: var(--green);
+  border-color: rgba(0, 255, 136, 0.3);
+  background: rgba(0, 255, 136, 0.06);
+}
+.btn-approve:hover { background: rgba(0, 255, 136, 0.14); border-color: var(--green); }
+
+.btn-reject {
+  color: var(--red);
+  border-color: rgba(255, 68, 68, 0.3);
+  background: rgba(255, 68, 68, 0.06);
+}
+.btn-reject:hover { background: rgba(255, 68, 68, 0.14); border-color: var(--red); }
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+.btn-ghost:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* ─────────────────────────────────────────
+   Input base
+   ───────────────────────────────────────── */
+.input-base {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.input-base:focus { border-color: var(--border-accent); }
+.input-base::placeholder { color: var(--text-dim); }
+
+textarea.input-base { resize: vertical; min-height: 80px; }
+
+/* ─────────────────────────────────────────
+   Tabs (custom, not Radix since we style them fully)
+   ───────────────────────────────────────── */
+.tab-list {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+
+.tab-trigger {
+  padding: 8px 16px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  background: transparent;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-trigger:hover { color: var(--text-primary); }
+.tab-trigger.active { color: var(--text-primary); border-bottom-color: var(--agent-color, var(--cyan)); }
+
+/* ─────────────────────────────────────────
+   HOTL log read/unread
+   ───────────────────────────────────────── */
+.hotl-unread { border-left: 2px solid var(--amber) !important; }
+.hotl-read { border-left: 2px solid transparent !important; opacity: 0.7; }
+
+/* ─────────────────────────────────────────
+   Council round table
+   ───────────────────────────────────────── */
+.council-table-ring {
+  border-radius: 50%;
+  border: 1px solid var(--border-accent);
+  background: radial-gradient(circle, rgba(20,20,20,0.9) 0%, rgba(10,10,10,0.98) 70%);
+}
+
+/* ─────────────────────────────────────────
+   Animations
+   ───────────────────────────────────────── */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.fade-in { animation: fade-in 0.2s ease forwards; }
+.slide-in { animation: slide-in-right 0.2s ease forwards; }
+
+/* ─────────────────────────────────────────
+   Recharts overrides
+   ───────────────────────────────────────── */
+.recharts-text { fill: var(--text-secondary) !important; font-size: 11px !important; }
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: var(--border) !important; }
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: var(--bg-card) !important;
+  border: 1px solid var(--border-accent) !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 11px !important;
+}

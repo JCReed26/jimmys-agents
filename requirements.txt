@@ -20,3 +20,7 @@ aiohttp
 aiosqlite
 jinja2
 google-auth
+
+# API server dependencies
+apscheduler>=3.10
+httpx>=0.27

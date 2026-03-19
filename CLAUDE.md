@@ -6,9 +6,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Vision
 
-**jimmys-agents** is a personal multi-agent automation system. Each agent is a standalone service managed via **Makefiles**. A lightweight FastAPI + HTMX frontend monitors all agents, shows stats, and surfaces HITL (Human-in-the-Loop) inboxes for approve/reject decisions. The system runs locally on a Mac.
+**jimmys-agents** is a personal multi-agent automation system. Each agent is a standalone service managed via **Makefiles** + APScheduler. A Next.js 16 + shadcn-style dashboard (glassmorphism, per-agent neon colors, Framer Motion) monitors all agents, shows live run streams via WebSocket, surfaces HITL (Human-in-the-Loop) approve/reject inboxes, and HOTL (Human-on-the-Loop) post-hoc review logs. The system runs locally on a Mac.
 
 Architecture principles: **simple, minimal, solo-dev DX first**. No overengineering.
+
+## Ports
+
+| Service | Port |
+|---|---|
+| Next.js dashboard | 3000 |
+| FastAPI API server (`shared/api_server.py`) | 8080 |
+| gmail-agent (langgraph dev) | 8001 |
+| calendar-agent (langgraph dev) | 8002 |
+| budget-agent (langgraph dev) | 8003 |
+| job-app-chain (langgraph dev) | 8004 |
 
 ---
 
@@ -136,6 +147,14 @@ Agents expose a simple internal API (or write to a shared state file/DB) that th
 - **ID discovery before action**: Always fetch IDs before acting on entities — never assume IDs.
 - **Secrets management**: Use `secrets/` directory in project root. Agents should check `../secrets/` when running from their subdirectories or `secrets/` if running from root.
 - **MetricsCallback works in REPL mode only**: Callbacks are Python objects and cannot be serialized over HTTP. When agents run via `langgraph up`, SQLite metrics are not captured via MetricsCallback. LangSmith (when `LANGSMITH_TRACING=true`) handles server-mode traces automatically at the environment level.
+- **Dashboard is Next.js 16 at port 3000** (not 8080 any more). API server is at port 8080. Do not confuse the two.
+- **State DB at `data/state.db`**: SQLite file for HITL inbox, HOTL logs, run records, schedules, council contracts. Schema defined in `shared/db.py`. Never delete this file without warning.
+- **HITL protocol**: Agent calls `POST /hitl` to create pending item → polls `GET /hitl/{id}` until resolved → dashboard shows approve/reject UI → resolution stored in DB.
+- **HOTL logging**: After each run, agent calls `POST /hotl` with structured summary `{tools:[{name,params,result}], thoughts:[], overview}`. Dashboard shows read/unread in `/hotl` feed.
+- **MEMORY.md + RULES.md per agent**: Each agent directory has these files. Agent writes to them during runs. Dashboard shows read-only via `/api/memory/{name}`. Never overwrite these files with agent-unrelated content.
+- **APScheduler in api_server.py**: Reads `schedules` table on startup. Dashboard `/schedules` page edits cron via `POST /api/schedules` → hot-reloads APScheduler. No restart needed.
+- **Agent Council at `/council`**: A2A coordination page with round-table SVG, contracts, and broadcast chat. Contracts stored in `council_contracts` table.
+- **Per-agent accent colors**: gmail=#00ff88, calendar=#00d4ff, budget=#a855f7, job-chain=#f59e0b. Always use these consistently in new UI.
 
 
 ### How to Add a Rule

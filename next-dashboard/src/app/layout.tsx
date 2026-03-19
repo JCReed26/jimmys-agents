@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { LayoutShell } from "@/components/layout-shell";
-
-const jetbrainsMono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   title: "jimmy's agents",
@@ -20,7 +14,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${jetbrainsMono.variable} antialiased`}>
+      <body className="antialiased">
         <LayoutShell>{children}</LayoutShell>
       </body>
     </html>

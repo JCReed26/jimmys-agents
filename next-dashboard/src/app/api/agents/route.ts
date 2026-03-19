@@ -1,36 +1,21 @@
 import { NextResponse } from 'next/server';
-import { AGENTS, WORKFLOWS } from '@/lib/agents';
+
+const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function GET() {
-  const results: Record<string, any> = {};
-  
-  const allServices = { ...AGENTS, ...WORKFLOWS };
-
-  for (const [key, config] of Object.entries(allServices)) {
-    try {
-      // Use a short timeout for health checks
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
-      
-      // We assume config has a url property.
-      // If it doesn't (some older workflow definition), skip or handle
-      if (!(config as any).url) continue;
-
-      const response = await fetch(`${(config as any).url}/ok`, { 
-        signal: controller.signal,
-        cache: 'no-store'
-      });
-      clearTimeout(timeoutId);
-
-      if (response.ok) {
-        results[key] = { status: 'RUNNING' };
-      } else {
-        results[key] = { status: 'DOWN' };
-      }
-    } catch (error) {
-      results[key] = { status: 'DOWN' };
-    }
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 3000);
+    const r = await fetch(`${API_BASE}/agents`, { signal: controller.signal, cache: 'no-store' });
+    clearTimeout(tid);
+    if (r.ok) return NextResponse.json(await r.json());
+  } catch {
+    // API server not running — return all DOWN
   }
-
-  return NextResponse.json(results);
+  return NextResponse.json({
+    "gmail-agent":    { status: 'DOWN' },
+    "calendar-agent": { status: 'DOWN' },
+    "budget-agent":   { status: 'DOWN' },
+    "job-app-chain":  { status: 'DOWN' },
+  });
 }
