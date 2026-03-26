@@ -1,0 +1,39 @@
+# Agent registry — source of truth for all registered agents.
+# Add/remove agents here, then POST /registry/reload (no server restart needed).
+#
+# Fields:
+#   port        - the port the agent's LangGraph process listens on
+#   dir         - subdirectory under project root (for memory/rules file reads)
+#   enabled     - false = registered but skip health checks and refuse /run requests
+#   rate_limit  - slowapi-style string (e.g. "10/minute", "100/hour")
+
+agents:
+  gmail-agent:
+    port: 8001
+    dir: agents/gmail-agent
+    enabled: true
+    rate_limit: "20/minute"
+
+  calendar-agent:
+    port: 8002
+    dir: agents/calendar-agent
+    enabled: true
+    rate_limit: "20/minute"
+
+  budget-agent:
+    port: 8003
+    dir: agents/budget-deepagent
+    enabled: true
+    rate_limit: "10/minute"
+
+  job-app-chain:
+    port: 8004
+    dir: automations/job-app-chain
+    enabled: true
+    rate_limit: "5/minute"
+
+  job-search-agent:
+    port: 8005
+    dir: agents/job-search-agent
+    enabled: false
+    rate_limit: "5/minute"

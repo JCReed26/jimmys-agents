@@ -22,3 +22,9 @@ progress.md
 # Logs
 *.log
 logs/
+
+**/.langgraph_api/
+.playwright-mcp/
+**/.next/
+*.png
+MEMORY.md
