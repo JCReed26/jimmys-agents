@@ -6,6 +6,7 @@ import os
 from langchain_core.messages import HumanMessage
 from datetime import datetime
 from typing import TypedDict, Optional
+from sub_agents import job_tracker_agent, classification_agent, optimization_agent
 
 llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
@@ -68,27 +69,6 @@ tools = [
     move_job_to_rejected,
 ]
 
-classification_agent = create_deep_agent(
-    name="Classification Agent",
-    model=llm,
-    tools=tools,
-    system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
-)
-
-optimization_agent = create_deep_agent(
-    name="Optimization Agent",
-    model=llm,
-    tools=tools,
-    system_prompt=OPTIMIZATION_SYSTEM_PROMPT,
-)
-
-job_tracker_agent = create_deep_agent(
-    name="Job Tracker Agent",
-    model=llm,
-    tools=tools,
-    system_prompt=JOB_TRACKER_SYSTEM_PROMPT,
-)
-
 agent = create_deep_agent(
     name="Job Search Agent",
     model=llm,
@@ -97,7 +77,7 @@ agent = create_deep_agent(
     skills=["skills/"],
     memory=["skills/AGENTS.md"],
     backend=FilesystemBackend(root_dir=Path(__file__).parent.absolute()),
-    subagents=[classification_agent, optimization_agent, job_tracker_agent]
+    subagents=[job_tracker_agent, classification_agent, optimization_agent]
 )
 
 
