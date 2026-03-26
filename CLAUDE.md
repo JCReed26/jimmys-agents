@@ -6,32 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Vision
 
-**jimmys-agents** is a personal multi-agent automation system. Each agent is a standalone service managed via **Makefiles** + APScheduler. A Next.js 16 + shadcn-style dashboard (glassmorphism, per-agent neon colors, Framer Motion) monitors all agents, shows live run streams via WebSocket, surfaces HITL (Human-in-the-Loop) approve/reject inboxes, and HOTL (Human-on-the-Loop) post-hoc review logs. The system runs locally on a Mac.
+**jimmys-agents** is a personal multi-agent automation system. Agents are standalone services managed via **Makefile** + APScheduler. A Next.js 16 + shadcn dashboard (`frontend/`) monitors all agents, shows live run streams, surfaces HITL (Human-in-the-Loop) approve/reject inboxes, and HOTL (Human-on-the-Loop) post-hoc review logs. The system runs locally on a Mac.
+
+**James builds agents. Claude handles system, backend, and orchestration.**
 
 Architecture principles: **simple, minimal, solo-dev DX first**. No overengineering.
+
+---
 
 ## Ports
 
 | Service | Port |
 |---|---|
-| Next.js dashboard | 3000 |
-| FastAPI API server (`shared/api_server.py`) | 8080 |
-| gmail-agent (langgraph dev) | 8001 |
-| calendar-agent (langgraph dev) | 8002 |
-| budget-agent (langgraph dev) | 8003 |
-| job-app-chain (langgraph dev) | 8004 |
-
----
-
-## Tech Stack
-
-- **Python 3.13** — all agents
-- **LangChain v1** (`langchain>=1.0`) — use `from langchain.agents import create_agent` (NOT the deprecated `langgraph.prebuilt.create_react_agent`)
-- **LangGraph** — for multi-node graph workflows (job-app-chain pattern)
-- **LLM**: Gemini 2.5 Flash via `langchain-google-genai` (`temperature=0`)
-- **Make** — local process management
-- **FastAPI + HTMX** — monitoring frontend
-- **Google APIs** — Sheets, Gmail, Calendar, Drive (OAuth2)
+| Next.js frontend (`frontend/`) | 3000 |
+| FastAPI API server (`backend/api_server.py`) | 8080 |
+| gmail-agent | 8001 |
+| calendar-agent | 8002 |
+| budget-deepagent | 8003 |
+| job-app-chain | 8004 |
 
 ---
 
@@ -39,123 +31,143 @@ Architecture principles: **simple, minimal, solo-dev DX first**. No overengineer
 
 ```
 jimmys-agents/
-├── Makefile                    # Root Makefile for all commands
-├── requirements.txt            # Unified dependencies
-├── a-dashboard/                # FastAPI + HTMX monitoring dashboard
-│   ├── main.py
-│   └── templates/
-├── gmail-agent/                # Polls inbox every 30 min, classifies emails
-├── calendar-agent/             # Google Calendar CRUD
-├── budget-agent/               # Google Sheets budget tracking
-├── job-app-chain/              # LangGraph workflow: scrape → classify → apply
-│   ├── CLAUDE.md               # Job-app-chain-specific specs
-│   ├── state.py
-│   ├── graph.py
-│   └── nodes/
-└── shared/                     # Shared utilities (auth helpers, sheet client, etc.)
+├── Makefile                    # Root — all dev commands
+├── requirements.txt            # Unified Python deps (Python 3.13)
+├── agents.yaml                 # Agent registry (name, port, dir, rate limit)
+├── agents/                     # All deepagents
+│   ├── budget-deepagent/       # REFERENCE pattern — use this for new agents
+│   ├── gmail-agent/            # Active, in-progress
+│   ├── calendar-agent/         # Active, in-progress
+│   └── job-reverse-rercuiter/  # Being built
+├── automations/                # LangGraph multi-step workflows
+│   └── job-app-chain/          # Scrape → classify → optimize → apply
+├── frontend/                   # Next.js 16 dashboard (renamed from next-dashboard)
+│   └── src/
+│       ├── app/                # Pages + API routes
+│       ├── components/         # UI components (shadcn)
+│       ├── hooks/              # useAgentChat, useAgUiStream
+│       └── lib/                # agents.ts registry, utils
+├── backend/                    # FastAPI + shared utilities (renamed from shared)
+│   ├── api_server.py           # Central gateway — HITL, HOTL, schedules, runs
+│   ├── db.py                   # SQLite schema (data/state.db)
+│   ├── auth.py                 # Google OAuth2 helpers
+│   ├── metrics_callback.py     # LangSmith instrumentation
+│   └── agent_registry.py       # agents.yaml parser
+├── docs/                       # Project documentation
+│   ├── deepagents.md           # Deepagent pattern guide
+│   ├── ag-ui-api.md            # AG-UI protocol spec
+│   ├── frontend.md             # Dashboard component docs
+│   └── issues.md               # Living bug/issue tracker (keep updated)
+├── data/                       # Runtime state (gitignored contents)
+│   └── state.db                # SQLite: HITL, HOTL, runs, schedules
+├── secrets/                    # Google OAuth tokens (gitignored)
+└── tests/                      # Test suite
 ```
 
 ---
 
-## LangChain v1 Conventions
+## Tech Stack
 
-**Always use the new v1 API. Never use deprecated patterns.**
-
-| Deprecated (do NOT use) | Current (use this) |
-|---|---|
-| `langgraph.prebuilt.create_react_agent` | `from langchain.agents import create_agent` |
-| `AgentExecutor` | LangGraph `StateGraph` or `create_agent` |
-| `initialize_agent` | `create_agent` |
-| `LLMChain` | LCEL: `prompt \| llm \| parser` |
-
-Tool definition uses `@tool` decorator. Bind tools via `llm.bind_tools(tools)`.
+- **Python 3.13** — all agents and backend
+- **deepagents** — agent framework (`create_deep_agent`, skills, middleware)
+- **LangGraph** — for multi-node workflows (automations/)
+- **LLM**: Gemini 2.5 Flash via `langchain-google-genai` (`temperature=0`)
+- **Make** — local process management
+- **Next.js 16** — frontend dashboard (App Router, TypeScript, shadcn/ui)
+- **FastAPI** — backend API gateway
+- **Google APIs** — Sheets, Gmail, Calendar, Drive (OAuth2)
+- **LangSmith** — always on when `LANGSMITH_TRACING=true`
 
 ---
 
-## Local Development Architecture
-
-The project uses `Makefile` for local development and process management.
+## Development Commands
 
 ```bash
-# Install dependencies
-make install
+make install          # Install all deps (Python + npm) — uses Python 3.13
+make start-all        # Start all services in background, logs in logs/
+make stop-all         # Stop all background services
 
-# Start all services (dashboard + agents) in background
-make start-all
-
-# Stop all services
-make stop-all
-
-# Run dashboard only (interactive)
-make run-dashboard
-
-# Run a single agent (interactive/debug)
-make run-gmail
-make run-calendar
-make run-budget
-
-# Run job application chain (task)
-make run-job-chain
+make run-api-server   # FastAPI on :8080 (interactive)
+make run-frontend     # Next.js on :3000 (interactive)
+make run-gmail        # gmail-agent on :8001 (interactive)
+make run-calendar     # calendar-agent on :8002 (interactive)
+make run-budget       # budget-deepagent on :8003 (interactive)
+make run-job-chain    # job-app-chain LangGraph server on :8004 (interactive)
 ```
 
-**Adding a new agent**: create `agent-name/` directory with agent code. Add a new target to `Makefile`.
+**Adding a new agent**: create `agents/{name}/` with `agent.py` + `langgraph.json` + `skills/`. Add entry to `agents.yaml`. Add `run-{name}` target to Makefile.
 
 ---
 
-## Monitoring Frontend
+## deepagent Pattern (reference: `agents/budget-deepagent/`)
 
-FastAPI + HTMX dashboard at `http://localhost:8080`:
-- **Agent status**: running/stopped, last run time, error count
-- **HITL inboxes**: approve/reject buttons for items requiring human decision (e.g. job-app-chain job approvals)
-- **Logs**: per-agent log streaming (via `logs/` directory tailing if implemented, currently raw file logs)
+All new agents use `create_deep_agent`. Do NOT use `AgentExecutor` or `create_agent`.
 
-Agents expose a simple internal API (or write to a shared state file/DB) that the frontend reads. Keep it simple — SQLite or JSON files are fine for state sharing between agent and frontend.
+```python
+from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
+from deepagents.middleware import AgentMiddleware
+
+class MyMiddleware(AgentMiddleware):
+    async def abefore_agent(self, state, runtime): ...  # pre-run hook
+    async def aafter_agent(self, state, runtime): ...   # post-run hook (post HOTL here)
+
+agent = create_deep_agent(
+    model=llm,
+    tools=tools,
+    skills=["skills/"],           # SKILL.md instruction modules
+    memory=["skills/AGENTS.md"],  # persistent agent notebook
+    backend=FilesystemBackend(...),
+    middleware=[MyMiddleware()],
+)
+```
+
+Each agent dir has:
+- `agent.py` — agent definition (minimal, ~100 lines)
+- `langgraph.json` — `{"graphs": {"agent": "./agent.py:agent"}}`
+- `skills/` — SKILL.md files + AGENTS.md memory
+- `MEMORY.md`, `RULES.md` — written by agent during runs
 
 ---
 
-## Authentication
+## Backend (API Gateway) — `backend/api_server.py`
 
-- **Google APIs**: OAuth2 via `credentials.json`.
-- **Secrets**: Stored in `secrets/` directory (gitignored).
-- **Env vars**: `.env` at project root.
+FastAPI on :8080. All paths:
+- `GET /ok` — health check
+- `GET /agents` — agent statuses from registry
+- `POST /agents/{name}/run` — AG-UI SSE stream (proxies to agent `/runs/stream`)
+- `GET /nav-counts` — HITL pending + HOTL unread for badge
+- `POST /registry/reload` — hot-reload agents.yaml
+- `GET|POST /hitl` — HITL inbox
+- `POST /hitl/{id}/resolve` — approve/reject
+- `GET|POST /hotl` — HOTL logs
+- `POST /hotl/{id}/read`, `POST /hotl/read-all` — mark read
+- `GET /runs`, `POST /runs/start`, `POST /runs/{id}/finish` — run lifecycle
+- `GET|POST /schedules`, `POST /schedules/{agent}/trigger` — APScheduler
+- `GET /stats`, `GET /search` — observability
+- `GET /agents/{name}/memory`, `GET /agents/{name}/rules` — file reads
 
 ---
 
-## Agent Patterns
+## Active Rules
 
-**Polling agent** (gmail-agent): infinite loop with sleep, try/except for graceful shutdown.
-
-**Interactive agent** (calendar, budget): REPL loop with streaming responses, `InMemorySaver` checkpointer for multi-turn context.
-
-**Graph workflow** (job-app-chain): LangGraph `StateGraph` with typed state (`TypedDict`), parallel branches, sheet-based locking (`Cell A1`: GREEN=unlocked, RED=locked).
-
-**HITL pattern**: agent writes pending items to shared state store → frontend reads and displays → user clicks approve/reject → agent polls for decision before continuing.
+- **State DB at `data/state.db`**: SQLite for all HITL, HOTL, runs, schedules. Schema in `backend/db.py`. Never delete without warning.
+- **HITL protocol**: Agent calls `POST /hitl` → polls `GET /hitl/{id}` → dashboard shows approve/reject → stored in DB.
+- **HOTL logging**: After each run, agent middleware calls `POST /hotl` with `{tools, thoughts, overview}`. Dashboard shows in `/logs`.
+- **MEMORY.md + RULES.md per agent**: Agent writes these. Dashboard reads via `GET /api/memory/{name}`. Never overwrite with unrelated content.
+- **APScheduler in backend**: Reads `schedules` DB table on startup. `/schedules` API hot-reloads scheduler — no restart needed.
+- **Per-agent accent colors**: gmail=#00ff88, calendar=#00d4ff, budget=#a855f7, job-chain=#f59e0b.
+- **Secrets in `secrets/`**: Agents look for `../../secrets/` (two levels up from `agents/{name}/`).
+- **Sheet locking in finally**: job-app-chain locks Cell A1 (RED). Must unlock (GREEN) in finally block — never leave locked.
+- **Gemini tool compatibility**: Avoid batch tool schemas. Use individual atomic tools only.
+- **temperature=0**: All agents use deterministic outputs.
+- **LangSmith traces**: MetricsCallback only works in REPL mode. For `langgraph dev` mode, LangSmith traces automatically via env vars.
+- **AG-UI stream**: Frontend chat → `POST /api/chat/{agent}` → agent `/runs/stream` directly. Gateway `/agents/{name}/run` is for scheduled runs and workflow monitoring (currently being fixed — see docs/issues.md C-01).
+- **docs/issues.md is the living issue tracker**: Update it when bugs are fixed or new issues are found. This file is studied by Claude to maintain context across sessions.
+- **`make install` uses `$(PYTHON) -m pip`**: This ensures deps install to the correct Python 3.13 venv, not system Python.
+- **`--no-browser` on langgraph dev**: LangSmith Studio opens via `http://localhost:{port}` not `0.0.0.0`. Always use `--no-browser` in Makefile targets.
 
 ---
 
-## Iterative Improvement Rules
-
-> This section is updated whenever a significant bug is fixed, a non-obvious architectural decision is made, or Jimmy explicitly asks to add a rule. It prevents repeating mistakes.
-
-### Active Rules
-
-- **Sheet locking must always unlock in `finally` blocks.** The job-app-chain locks Cell A1 (RED) at start and must unlock (GREEN) even on failure. Forgetting this leaves the sheet permanently locked.
-- **Gemini tool compatibility**: Gemini does not support batch tool schemas well. Avoid batch-style tools; prefer individual atomic tools. (Learned from budget-agent patch.)
-- **Token 0 for agents**: All agents use `temperature=0` for deterministic outputs.
-- **No AgentExecutor**: LangChain v1 deprecated it. Use `create_agent` or LangGraph `StateGraph`.
-- **LangGraph Dev Server for agent serving**: Each agent is served via `langgraph dev` (or `langgraph up`) which gives standardized `/invoke`, `/stream`, `/playground` endpoints and SSE streaming out of the box. The dashboard communicates with agents via these HTTP endpoints. Ports: gmail=8001, calendar=8002, budget=8003, dashboard=8080.
-- **ID discovery before action**: Always fetch IDs before acting on entities — never assume IDs.
-- **Secrets management**: Use `secrets/` directory in project root. Agents should check `../secrets/` when running from their subdirectories or `secrets/` if running from root.
-- **MetricsCallback works in REPL mode only**: Callbacks are Python objects and cannot be serialized over HTTP. When agents run via `langgraph up`, SQLite metrics are not captured via MetricsCallback. LangSmith (when `LANGSMITH_TRACING=true`) handles server-mode traces automatically at the environment level.
-- **Dashboard is Next.js 16 at port 3000** (not 8080 any more). API server is at port 8080. Do not confuse the two.
-- **State DB at `data/state.db`**: SQLite file for HITL inbox, HOTL logs, run records, schedules, council contracts. Schema defined in `shared/db.py`. Never delete this file without warning.
-- **HITL protocol**: Agent calls `POST /hitl` to create pending item → polls `GET /hitl/{id}` until resolved → dashboard shows approve/reject UI → resolution stored in DB.
-- **HOTL logging**: After each run, agent calls `POST /hotl` with structured summary `{tools:[{name,params,result}], thoughts:[], overview}`. Dashboard shows read/unread in `/hotl` feed.
-- **MEMORY.md + RULES.md per agent**: Each agent directory has these files. Agent writes to them during runs. Dashboard shows read-only via `/api/memory/{name}`. Never overwrite these files with agent-unrelated content.
-- **APScheduler in api_server.py**: Reads `schedules` table on startup. Dashboard `/schedules` page edits cron via `POST /api/schedules` → hot-reloads APScheduler. No restart needed.
-- **Agent Council at `/council`**: A2A coordination page with round-table SVG, contracts, and broadcast chat. Contracts stored in `council_contracts` table.
-- **Per-agent accent colors**: gmail=#00ff88, calendar=#00d4ff, budget=#a855f7, job-chain=#f59e0b. Always use these consistently in new UI.
-
-
-### How to Add a Rule
-When you fix a non-obvious bug, make an architectural decision with lasting implications, or Jimmy says "add this to rules" — append a bullet here with a short explanation of *why* the rule exists.
+## How to Add a Rule
+When you fix a non-obvious bug, make an architectural decision, or Jimmy says "add this to rules" — append a bullet to Active Rules above with a short explanation of *why* the rule exists.

@@ -10,6 +10,7 @@ langsmith
 deepagents
 python-docx
 duckduckgo-search
+ddgs
 python-jobspy
 playwright
 gspread
@@ -24,3 +25,6 @@ google-auth
 # API server dependencies
 apscheduler>=3.10
 httpx>=0.27
+slowapi>=0.1.9
+pyyaml>=6.0
+ag-ui-langgraph
