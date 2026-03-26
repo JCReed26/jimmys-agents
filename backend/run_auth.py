@@ -1,12 +1,12 @@
 """
 Run OAuth flow locally for all agents that need Google credentials.
-Run from the repo root: python shared/run_auth.py
+Run from the repo root: python backend/run_auth.py
 """
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from shared.auth import get_google_service
+from backend.auth import get_google_service
 
 CREDENTIALS = "secrets/credentials.json"
 
@@ -63,7 +63,7 @@ def main():
             print(f"FAILED: {e}")
 
     print("\nDone. Rebuild containers to pick up new tokens:")
-    print("  docker-compose up --build gmail-agent calendar-agent budget-agent a-dashboard")
+    print("  make start-all")
 
 
 if __name__ == "__main__":

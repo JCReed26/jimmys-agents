@@ -3,7 +3,7 @@ import sqlite3
 import time
 import pytest
 from unittest.mock import MagicMock
-from shared.metrics_callback import MetricsCallback, init_db
+from backend.metrics_callback import MetricsCallback, init_db
 
 @pytest.fixture
 def db_path(tmp_path):

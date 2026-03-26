@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from shared.auth import get_google_service
+from backend.auth import get_google_service
 
 def test_get_google_service_raises_if_no_credentials(tmp_path):
     """Should raise FileNotFoundError when credentials.json missing."""
-    with patch("shared.auth.os.path.exists", side_effect=lambda path: False):
+    with patch("backend.auth.os.path.exists", side_effect=lambda path: False):
         with pytest.raises(FileNotFoundError, match="credentials.json"):
             get_google_service(
                 scopes=["https://www.googleapis.com/auth/calendar"],
@@ -19,9 +19,9 @@ def test_get_google_service_loads_valid_token(tmp_path):
     mock_creds = MagicMock()
     mock_creds.valid = True
 
-    with patch("shared.auth.Credentials.from_authorized_user_file", return_value=mock_creds):
-        with patch("shared.auth.os.path.exists", return_value=True):
-            with patch("shared.auth.build") as mock_build:
+    with patch("backend.auth.Credentials.from_authorized_user_file", return_value=mock_creds):
+        with patch("backend.auth.os.path.exists", return_value=True):
+            with patch("backend.auth.build") as mock_build:
                 get_google_service(
                     scopes=["https://www.googleapis.com/auth/calendar"],
                     token_path=str(tmp_path / "token.json"),

@@ -10,24 +10,30 @@
 agents:
   gmail-agent:
     port: 8001
-    dir: gmail-agent
+    dir: agents/gmail-agent
     enabled: true
     rate_limit: "20/minute"
 
   calendar-agent:
     port: 8002
-    dir: calendar-agent
+    dir: agents/calendar-agent
     enabled: true
     rate_limit: "20/minute"
 
   budget-agent:
     port: 8003
-    dir: budget-agent
+    dir: agents/budget-deepagent
     enabled: true
     rate_limit: "10/minute"
 
   job-app-chain:
     port: 8004
-    dir: job-app-chain
+    dir: automations/job-app-chain
     enabled: true
+    rate_limit: "5/minute"
+
+  job-search-agent:
+    port: 8005
+    dir: agents/job-search-agent
+    enabled: false
     rate_limit: "5/minute"

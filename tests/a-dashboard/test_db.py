@@ -1,7 +1,7 @@
 import pytest
 import sqlite3
 import asyncio
-from db import get_agent_stats, get_recent_runs
+from backend.db import get_agent_stats, get_recent_runs
 
 @pytest.fixture
 def db_with_data(tmp_path):

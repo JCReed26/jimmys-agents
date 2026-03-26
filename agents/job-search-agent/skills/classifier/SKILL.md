@@ -1,4 +1,8 @@
-# Classification
+---
+Classifier
+---
+
+# Classifier
 
 This is the process of looking at all the data around a job and determining if it is worth it for jimmy to apply to the job or not
 
@@ -16,7 +20,7 @@ second is the human in the loop verification that human jimmy approves
 
 you will give the job its description and chosen resume and cover letter templates to start with for jimmy to look at
 
-automatic diqualifications
+automatic disqualifications
 
 - more than 5 years experience required
 - senior, principal, or founding in the title

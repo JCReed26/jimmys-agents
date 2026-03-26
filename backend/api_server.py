@@ -31,8 +31,8 @@ from slowapi.util import get_remote_address
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from shared import db
-from shared.agent_registry import registry
+from backend import db
+from backend.agent_registry import registry
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
