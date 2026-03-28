@@ -6,17 +6,19 @@ AG-UI compliant gateway for LangGraph agent processes.
 - Strict AG-UI: POST /agents/{name}/run → SSE stream response
 - Per-agent rate limiting via slowapi
 - Circuit breaker: 3 failures → OPEN for 60s → 503 fast-fail
-- No WebSocket, no custom SSE pub-sub, no translation layer
+- JWT auth via Supabase — tenant_id extracted from token, all queries tenant-scoped
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Optional
 
+import asyncpg
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -31,8 +33,9 @@ from slowapi.util import get_remote_address
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend import db
+from backend import db_postgres as db
 from backend.agent_registry import registry
+from backend.auth_middleware import auth_middleware, validate_env
 from backend.translator import StreamTranslator
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -44,30 +47,38 @@ PROJECT_ROOT = Path(__file__).parent.parent
 limiter = Limiter(key_func=get_remote_address)
 
 # ─────────────────────────────────────────
-# Scheduler
+# Scheduler + pool (module-level for background tasks)
 # ─────────────────────────────────────────
 
 scheduler = AsyncIOScheduler()
+_pool: asyncpg.Pool | None = None
 
 
-async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: str | None = None):
+async def trigger_agent_run(
+    tenant_id: str,
+    agent: str,
+    workflow: str = "default",
+    task_prompt: str | None = None,
+    thread_id: str | None = None,
+):
     """
     Fire a LangGraph /runs/stream call for scheduled runs.
     Translates to AG-UI, publishes to live queue, writes HOTL on completion.
     """
+    global _pool
     run_id = str(uuid.uuid4())
-    db.run_start(agent, run_id)
+
+    async with _pool.acquire() as conn:
+        await db.start_run(conn, tenant_id, agent, run_id)
 
     agent_cfg = registry.get(agent)
     if not agent_cfg or not agent_cfg.enabled:
-        db.run_finish(run_id, "error", error_msg="Agent not registered or disabled")
+        async with _pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "error", error_msg="Agent not registered or disabled")
         return
 
-    # Get or create a stable thread_id for this schedule
-    sched = db.schedule_get(agent, workflow)
-    thread_id = (sched.get("thread_id") if sched else None) or f"thread-schedule-{agent}-{workflow}"
-    if sched and not sched.get("thread_id"):
-        db.schedule_set_thread_id(agent, workflow, thread_id)
+    if thread_id is None:
+        thread_id = db.make_thread_id(tenant_id, agent)
 
     prompt = task_prompt or "Run your scheduled task."
     lg_payload = {
@@ -109,18 +120,29 @@ async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: 
         usage = translator.usage_metadata or {}
         token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         cost_usd = _estimate_cost(token_count)
-        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
-        db.hotl_create(agent, run_id, translator.hotl_summary)
+        async with _pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
+            await db.create_hotl_log(conn, tenant_id, agent, run_id, translator.hotl_summary)
 
     except Exception as e:
-        db.run_finish(run_id, "error", error_msg=str(e))
+        async with _pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
         _publish_live(agent, translator.error(str(e)))
 
 
-def _reload_schedules():
-    """Sync APScheduler with the schedules_v2 table."""
-    for row in db.schedule_list():
-        job_id = f"agent_{row['agent']}_{row['workflow']}"
+async def _reload_schedules():
+    """Sync APScheduler with the schedules table (all tenants)."""
+    global _pool
+    if _pool is None:
+        return
+
+    async with _pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT tenant_id::text, agent, workflow, cron_expr, enabled, task_prompt, thread_id::text FROM schedules"
+        )
+
+    for row in rows:
+        job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['workflow']}"
         if scheduler.get_job(job_id):
             scheduler.remove_job(job_id)
         if row["enabled"]:
@@ -131,9 +153,11 @@ def _reload_schedules():
                     trigger=trigger,
                     id=job_id,
                     kwargs={
+                        "tenant_id": row["tenant_id"],
                         "agent": row["agent"],
                         "workflow": row["workflow"],
                         "task_prompt": row.get("task_prompt"),
+                        "thread_id": row.get("thread_id"),
                     },
                     replace_existing=True,
                 )
@@ -141,12 +165,25 @@ def _reload_schedules():
                 pass  # invalid cron — skip silently
 
 
+async def _init_conn(conn):
+    """Register JSON/JSONB codecs so asyncpg returns Python dicts."""
+    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+    await conn.set_type_codec("json", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _reload_schedules()
+    global _pool
+    validate_env()
+    _pool = await asyncpg.create_pool(
+        os.environ["DATABASE_URL"], min_size=2, max_size=10, init=_init_conn
+    )
+    app.state.pool = _pool
+    await _reload_schedules()
     scheduler.start()
     yield
     scheduler.shutdown()
+    await _pool.close()
 
 
 # ─────────────────────────────────────────
@@ -166,6 +203,14 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def _auth(request: Request, call_next):
+    # Pass OPTIONS through so CORS preflight isn't blocked by auth
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    return await auth_middleware(request, call_next)
+
+
 # ─────────────────────────────────────────
 # Health
 # ─────────────────────────────────────────
@@ -176,14 +221,30 @@ def health():
 
 
 # ─────────────────────────────────────────
+# Me
+# ─────────────────────────────────────────
+
+@app.get("/me")
+async def get_me(request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT name FROM tenants WHERE id=$1", request.state.tenant_id
+        )
+    return {
+        "tenant_id": request.state.tenant_id,
+        "user_id": request.state.user_id,
+        "tenant_name": row["name"] if row else "Unknown",
+    }
+
+
+# ─────────────────────────────────────────
 # Nav counts (for sidebar badges)
 # ─────────────────────────────────────────
 
 @app.get("/nav-counts")
-def nav_counts():
-    pending = len(db.hitl_list(status="pending"))
-    unread = len(db.hotl_list(unread_only=True))
-    return {"hitl": pending, "hotlUnread": unread}
+async def nav_counts(request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.get_nav_counts(conn, request.state.tenant_id)
 
 
 # ─────────────────────────────────────────
@@ -191,10 +252,10 @@ def nav_counts():
 # ─────────────────────────────────────────
 
 @app.post("/registry/reload")
-def reload_registry():
+async def reload_registry(request: Request):
     """Hot-reload agents.yaml without restarting the server."""
     registry.reload()
-    _reload_schedules()
+    await _reload_schedules()
     return {
         "ok": True,
         "agents": [a.name for a in registry.get_all()],
@@ -202,41 +263,45 @@ def reload_registry():
 
 
 @app.get("/agents")
-async def agents_status():
-    """List all registered agents with live health + circuit breaker status."""
+async def agents_status(request: Request):
+    """List tenant's provisioned agents with live health + circuit breaker status."""
+    tenant_id = request.state.tenant_id
+
+    async with request.app.state.pool.acquire() as conn:
+        tenant_agents = await db.list_tenant_agents(conn, tenant_id)
+        schedules = await db.list_schedules(conn, tenant_id)
+        hitl_pending = await db.list_hitl_items(conn, tenant_id, status="pending")
+
     results: dict[str, dict] = {}
 
     async with httpx.AsyncClient(timeout=2) as client:
-        for agent in registry.get_all():
+        for agent in tenant_agents:
             entry: dict[str, Any] = {
-                "enabled": agent.enabled,
-                "port": agent.port,
-                "circuit": registry.circuit_status(agent.name),
+                "enabled": agent["status"] == "active",
+                "port": agent["port"],
+                "accentColor": agent["accent_color"],
+                "displayName": agent["display_name"],
+                "circuit": registry.circuit_status(agent["name"]),
             }
-            if agent.enabled:
-                try:
-                    r = await client.get(f"{registry.base_url(agent.name)}/assistants")
-                    entry["status"] = "RUNNING" if r.status_code == 200 else "DOWN"
-                except Exception:
-                    entry["status"] = "DOWN"
-            else:
-                entry["status"] = "DISABLED"
-            results[agent.name] = entry
+            try:
+                r = await client.get(f"http://localhost:{agent['port']}/assistants")
+                entry["status"] = "RUNNING" if r.status_code == 200 else "DOWN"
+            except Exception:
+                entry["status"] = "DOWN"
+            results[agent["name"]] = entry
 
-    # Enrich with schedule info
-    for sched in db.schedule_list():
+    for sched in schedules:
         name = sched["agent"]
         if name in results:
             results[name].setdefault("schedules", []).append({
                 "workflow": sched["workflow"],
                 "cron": sched["cron_expr"],
                 "enabled": bool(sched["enabled"]),
-                "lastRun": sched.get("last_run"),
-                "nextRun": sched.get("next_run"),
+                "lastRun": str(sched["last_run"]) if sched.get("last_run") else None,
+                "nextRun": str(sched["next_run"]) if sched.get("next_run") else None,
             })
 
-    # Enrich with pending HITL count
-    for item in db.hitl_list(status="pending"):
+    for item in hitl_pending:
         name = item["agent"]
         if name in results:
             results[name]["hitlCount"] = results[name].get("hitlCount", 0) + 1
@@ -248,26 +313,27 @@ async def agents_status():
 # AG-UI run endpoint (POST → SSE stream)
 # ─────────────────────────────────────────
 
-async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
+async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> AsyncIterator[str]:
     """
     Call {agent_url}/runs/stream (LangGraph native SSE),
     translate to AG-UI events, stream to browser.
     Writes run_record and HOTL on completion.
     """
     run_id = str(uuid.uuid4())
-    db.run_start(agent_name, run_id)
+    pool = request.app.state.pool
 
-    # Parse AG-UI request body
+    async with pool.acquire() as conn:
+        await db.start_run(conn, tenant_id, agent_name, run_id)
+
     try:
         body_bytes = await request.body()
         req_data = json.loads(body_bytes) if body_bytes else {}
     except Exception:
         req_data = {}
 
-    thread_id = req_data.get("thread_id") or str(uuid.uuid4())
+    thread_id = req_data.get("thread_id") or db.make_thread_id(tenant_id, agent_name)
     messages = req_data.get("messages", [])
 
-    # Build LangGraph payload
     lg_payload = {
         "assistant_id": "agent",
         "input": {"messages": messages},
@@ -310,17 +376,20 @@ async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
         usage = translator.usage_metadata or {}
         token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         cost_usd = _estimate_cost(token_count)
-        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
-        db.hotl_create(agent_name, run_id, translator.hotl_summary)
+        async with pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
+            await db.create_hotl_log(conn, tenant_id, agent_name, run_id, translator.hotl_summary)
 
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
-        db.run_finish(run_id, "error", error_msg=str(e))
+        async with pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
         yield translator.error(f"Agent returned HTTP {e.response.status_code}")
 
     except Exception as e:
         registry.record_failure(agent_name)
-        db.run_finish(run_id, "error", error_msg=str(e))
+        async with pool.acquire() as conn:
+            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
         yield translator.error(str(e))
 
 
@@ -338,13 +407,11 @@ async def agent_run(name: str, request: Request):
     if registry.is_circuit_open(name):
         raise HTTPException(503, f"Agent '{name}' circuit breaker is OPEN — too many recent failures. Retry later.")
 
-    # Per-agent rate limit from agents.yaml (evaluated dynamically)
-    # slowapi's decorator API doesn't support dynamic limits, so we apply it manually.
-    limit_str = agent.rate_limit  # e.g. "10/minute"
+    limit_str = agent.rate_limit
     await _check_rate_limit(name, limit_str, request)
 
     return StreamingResponse(
-        _proxy_sse(name, request),
+        _proxy_sse(name, request.state.tenant_id, request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -393,7 +460,6 @@ async def chat_history(agent: str, thread_id: str):
             )
             r.raise_for_status()
             state = r.json()
-            # LangGraph thread state: {"values": {"messages": [...]}, ...}
             messages_raw = state.get("values", {}).get("messages", [])
             messages = [
                 {"role": "assistant" if m.get("type") == "ai" else "human",
@@ -450,7 +516,6 @@ async def _check_rate_limit(agent_name: str, limit_str: str, request: Request):
     buckets = _rate_buckets.setdefault(agent_name, {})
     timestamps = buckets.setdefault(client_ip, [])
 
-    # Evict timestamps outside the window
     buckets[client_ip] = [t for t in timestamps if now - t < window_secs]
 
     if len(buckets[client_ip]) >= max_calls:
@@ -479,28 +544,32 @@ class HitlResolveRequest(BaseModel):
 
 
 @app.get("/hitl")
-def list_hitl(status: str | None = None, agent: str | None = None):
-    return db.hitl_list(status=status, agent=agent)
+async def list_hitl(request: Request, status: str | None = None, agent: str | None = None):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.list_hitl_items(conn, request.state.tenant_id, status=status, agent=agent)
 
 
 @app.post("/hitl")
-def create_hitl(req: HitlCreateRequest):
-    item_id = db.hitl_create(req.agent, req.item_type, req.payload)
-    return {"id": item_id}
+async def create_hitl(req: HitlCreateRequest, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        item = await db.create_hitl_item(conn, request.state.tenant_id, req.agent, req.item_type, req.payload)
+    return {"id": str(item["id"])}
 
 
 @app.get("/hitl/{item_id}")
-def get_hitl(item_id: int):
-    item = db.hitl_get(item_id)
+async def get_hitl(item_id: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        item = await db.get_hitl_item(conn, request.state.tenant_id, item_id)
     if not item:
         raise HTTPException(404, "Not found")
     return item
 
 
 @app.post("/hitl/{item_id}/resolve")
-def resolve_hitl(item_id: int, req: HitlResolveRequest):
-    ok = db.hitl_resolve(item_id, req.decision, req.comment)
-    if not ok:
+async def resolve_hitl(item_id: str, req: HitlResolveRequest, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        result = await db.resolve_hitl_item(conn, request.state.tenant_id, item_id, req.decision, req.comment)
+    if not result:
         raise HTTPException(404, "Item not found or already resolved")
     return {"ok": True}
 
@@ -516,32 +585,37 @@ class HotlCreateRequest(BaseModel):
 
 
 @app.get("/hotl")
-def list_hotl(agent: str | None = None, unread_only: bool = False):
-    return db.hotl_list(agent=agent, unread_only=unread_only)
+async def list_hotl(request: Request, agent: str | None = None, unread_only: bool = False):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.list_hotl_logs(conn, request.state.tenant_id, agent=agent, unread_only=unread_only)
 
 
 @app.post("/hotl")
-def create_hotl(req: HotlCreateRequest):
-    log_id = db.hotl_create(req.agent, req.run_id, req.summary)
-    return {"id": log_id}
+async def create_hotl(req: HotlCreateRequest, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        log = await db.create_hotl_log(conn, request.state.tenant_id, req.agent, req.run_id, req.summary)
+    return {"id": str(log["id"])}
 
 
 @app.post("/hotl/clear")
-def clear_hotl(agent: str | None = None):
-    """Permanently delete HOTL logs. Destructive — confirm in UI before calling."""
-    deleted = db.hotl_clear(agent=agent)
-    return {"ok": True, "deleted": deleted}
-
-
-@app.post("/hotl/{log_id}/read")
-def mark_hotl_read(log_id: int):
-    db.hotl_mark_read(log_id=log_id)
+async def clear_hotl(request: Request):
+    """Permanently delete all HOTL logs for this tenant. Destructive — confirm in UI before calling."""
+    async with request.app.state.pool.acquire() as conn:
+        await db.clear_hotl_logs(conn, request.state.tenant_id)
     return {"ok": True}
 
 
 @app.post("/hotl/read-all")
-def mark_all_hotl_read(agent: str | None = None):
-    db.hotl_mark_read(agent=agent)
+async def mark_all_hotl_read(request: Request, agent: str | None = None):
+    async with request.app.state.pool.acquire() as conn:
+        await db.mark_all_hotl_read(conn, request.state.tenant_id, agent=agent)
+    return {"ok": True}
+
+
+@app.post("/hotl/{log_id}/read")
+async def mark_hotl_read(log_id: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await db.mark_hotl_read(conn, request.state.tenant_id, log_id)
     return {"ok": True}
 
 
@@ -550,13 +624,15 @@ def mark_all_hotl_read(agent: str | None = None):
 # ─────────────────────────────────────────
 
 @app.get("/runs")
-def list_runs(agent: str | None = None, limit: int = 50):
-    return db.run_list(agent=agent, limit=limit)
+async def list_runs(request: Request, agent: str | None = None, limit: int = 50):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.list_runs(conn, request.state.tenant_id, agent=agent, limit=limit)
 
 
 @app.post("/runs/start")
-def start_run(agent: str, run_id: str):
-    db.run_start(agent, run_id)
+async def start_run_endpoint(agent: str, run_id: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await db.start_run(conn, request.state.tenant_id, agent, run_id)
     return {"ok": True}
 
 
@@ -568,8 +644,9 @@ class RunFinishRequest(BaseModel):
 
 
 @app.post("/runs/{run_id}/finish")
-def finish_run(run_id: str, req: RunFinishRequest):
-    db.run_finish(run_id, req.status, req.token_count, req.cost_usd, req.error_msg)
+async def finish_run_endpoint(run_id: str, req: RunFinishRequest, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await db.finish_run(conn, request.state.tenant_id, run_id, req.status, req.token_count, req.cost_usd, req.error_msg)
     return {"ok": True}
 
 
@@ -586,61 +663,60 @@ class ScheduleUpsertRequest(BaseModel):
 
 
 @app.get("/schedules")
-def list_schedules():
-    return db.schedule_list()
+async def list_schedules_endpoint(request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.list_schedules(conn, request.state.tenant_id)
 
 
 @app.post("/schedules")
-def upsert_schedule(req: ScheduleUpsertRequest):
-    db.schedule_upsert(req.agent, req.cron_expr, req.enabled, req.task_prompt, req.workflow)
-    _reload_schedules()
+async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await db.upsert_schedule(
+            conn,
+            request.state.tenant_id,
+            req.agent,
+            req.workflow,
+            req.cron_expr,
+            req.enabled,
+            req.task_prompt or None,
+        )
+    await _reload_schedules()
     return {"ok": True}
 
 
 @app.post("/schedules/{agent}/trigger")
-async def manual_trigger(agent: str, workflow: str = "default"):
+async def manual_trigger(agent: str, request: Request, workflow: str = "default"):
     """Manually fire an agent workflow outside its schedule."""
-    sched = db.schedule_get(agent, workflow)
+    tenant_id = request.state.tenant_id
+    async with request.app.state.pool.acquire() as conn:
+        rows = await db.list_schedules(conn, tenant_id, agent=agent)
+    sched = next((r for r in rows if r["workflow"] == workflow), None)
     prompt = sched["task_prompt"] if sched else None
-    asyncio.create_task(trigger_agent_run(agent, workflow, prompt))
+    thread_id = str(sched["thread_id"]) if sched and sched.get("thread_id") else None
+    asyncio.create_task(trigger_agent_run(tenant_id, agent, workflow, prompt, thread_id))
     return {"ok": True, "message": f"Triggered {agent}/{workflow}"}
 
 
 # ─────────────────────────────────────────
-# Memory / Rules (file-based — Deep Agents owns these)
+# Memory / Rules (Postgres — agent_memory / agent_rules tables)
 # ─────────────────────────────────────────
 
-def _read_agent_file(name: str, filename: str) -> str:
-    agent = registry.get(name)
-    if not agent:
-        return f"# {filename}\n\n_(Agent '{name}' not registered.)_\n"
-    # Memory: check skills/AGENTS.md first (deepagent convention), fall back to MEMORY.md
-    if filename == "MEMORY.md":
-        for candidate in (
-            PROJECT_ROOT / agent.dir / "skills" / "AGENTS.md",
-            PROJECT_ROOT / agent.dir / "MEMORY.md",
-        ):
-            if candidate.exists():
-                return candidate.read_text()
-        return "# Memory\n\n_(No content yet — written by the agent during runs.)_\n"
-    path = PROJECT_ROOT / agent.dir / filename
-    if path.exists():
-        return path.read_text()
-    return f"# {filename}\n\n_(No content yet — this file is managed by the agent.)_\n"
-
-
 @app.get("/agents/{name}/memory")
-def get_memory(name: str):
-    if not registry.is_registered(name):
-        raise HTTPException(404, f"Agent '{name}' not registered.")
-    return {"content": _read_agent_file(name, "MEMORY.md")}
+async def get_memory(name: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        content = await db.get_agent_memory(conn, request.state.tenant_id, name)
+    if not content:
+        content = "# Memory\n\n_(No content yet — written by the agent during runs.)_\n"
+    return {"content": content}
 
 
 @app.get("/agents/{name}/rules")
-def get_rules(name: str):
-    if not registry.is_registered(name):
-        raise HTTPException(404, f"Agent '{name}' not registered.")
-    return {"content": _read_agent_file(name, "RULES.md")}
+async def get_rules(name: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        content = await db.get_agent_rules(conn, request.state.tenant_id, name)
+    if not content:
+        content = "# Rules\n\n_(No content yet — this file is managed by the agent.)_\n"
+    return {"content": content}
 
 
 # ─────────────────────────────────────────
@@ -648,19 +724,9 @@ def get_rules(name: str):
 # ─────────────────────────────────────────
 
 @app.get("/stats")
-def get_stats():
-    runs = db.run_list(limit=1000)
-    by_agent: dict[str, dict] = {}
-    for r in runs:
-        a = r["agent"]
-        if a not in by_agent:
-            by_agent[a] = {"total_runs": 0, "errors": 0, "total_tokens": 0, "total_cost": 0.0}
-        by_agent[a]["total_runs"] += 1
-        if r["status"] == "error":
-            by_agent[a]["errors"] += 1
-        by_agent[a]["total_tokens"] += r.get("token_count") or 0
-        by_agent[a]["total_cost"] += r.get("cost_usd") or 0.0
-    return {"by_agent": by_agent, "total_runs": len(runs)}
+async def get_stats(request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        return await db.get_stats(conn, request.state.tenant_id)
 
 
 # ─────────────────────────────────────────
@@ -668,59 +734,71 @@ def get_stats():
 # ─────────────────────────────────────────
 
 @app.get("/search")
-def global_search(q: str):
+async def global_search(q: str, request: Request):
     if not q or len(q) < 2:
         return {"results": []}
     q_lower = q.lower()
     results: list[dict] = []
 
-    for log in db.hotl_list():
+    async with request.app.state.pool.acquire() as conn:
+        hotl_logs = await db.list_hotl_logs(conn, request.state.tenant_id, limit=200)
+        hitl_items = await db.list_hitl_items(conn, request.state.tenant_id)
+        memory_rows = await conn.fetch(
+            "SELECT agent, content FROM agent_memory WHERE tenant_id=$1", request.state.tenant_id
+        )
+        rules_rows = await conn.fetch(
+            "SELECT agent, content FROM agent_rules WHERE tenant_id=$1", request.state.tenant_id
+        )
+
+    for log in hotl_logs:
         s = log["summary"]
+        if isinstance(s, str):
+            s = json.loads(s)
         if q_lower in json.dumps(s).lower():
             results.append({
                 "type": "hotl",
                 "agent": log["agent"],
-                "id": log["id"],
+                "id": str(log["id"]),
                 "excerpt": s.get("overview", "")[:120],
-                "created_at": log["created_at"],
+                "created_at": str(log["created_at"]),
             })
 
-    for item in db.hitl_list():
+    for item in hitl_items:
         text = (str(item.get("payload", "")) + " " + (item.get("comment") or "")).lower()
         if q_lower in text:
             results.append({
                 "type": "hitl",
                 "agent": item["agent"],
-                "id": item["id"],
+                "id": str(item["id"]),
                 "excerpt": str(item.get("payload", ""))[:120],
-                "created_at": item["created_at"],
+                "created_at": str(item["created_at"]),
             })
 
-    for agent in registry.get_all():
-        agent_dir = PROJECT_ROOT / agent.dir
-        candidates = [
-            (agent_dir / "skills" / "AGENTS.md", "memory"),
-            (agent_dir / "MEMORY.md", "memory"),
-            (agent_dir / "RULES.md", "rules"),
-        ]
-        seen_types: set[str] = set()
-        for fpath, ftype in candidates:
-            if ftype in seen_types:
-                continue  # already matched a memory file for this agent
-            if fpath.exists():
-                content = fpath.read_text()
-                if q_lower in content.lower():
-                    idx = content.lower().index(q_lower)
-                    start = max(0, idx - 60)
-                    excerpt = content[start : idx + 60].strip()
-                    results.append({
-                        "type": ftype,
-                        "agent": agent.name,
-                        "id": fpath.name,
-                        "excerpt": excerpt,
-                        "created_at": None,
-                    })
-                    seen_types.add(ftype)
+    for row in memory_rows:
+        content = row["content"] or ""
+        if q_lower in content.lower():
+            idx = content.lower().index(q_lower)
+            start = max(0, idx - 60)
+            results.append({
+                "type": "memory",
+                "agent": row["agent"],
+                "id": "MEMORY",
+                "excerpt": content[start: idx + 60].strip(),
+                "created_at": None,
+            })
+
+    for row in rules_rows:
+        content = row["content"] or ""
+        if q_lower in content.lower():
+            idx = content.lower().index(q_lower)
+            start = max(0, idx - 60)
+            results.append({
+                "type": "rules",
+                "agent": row["agent"],
+                "id": "RULES",
+                "excerpt": content[start: idx + 60].strip(),
+                "created_at": None,
+            })
 
     return {"results": results[:50]}
 
