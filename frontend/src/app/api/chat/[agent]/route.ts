@@ -8,6 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ agent: string }> }
 ) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ messages: [] }, { status: 401 });
   const { agent } = await params;
   const url = new URL(req.url);
   const threadId = url.searchParams.get('thread_id') ?? '';
@@ -30,6 +31,7 @@ export async function POST(
   { params }: { params: Promise<{ agent: string }> }
 ) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { agent } = await params;
   try {
     const body = await req.json();

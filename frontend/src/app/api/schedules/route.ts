@@ -5,6 +5,7 @@ const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function GET() {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json([], { status: 401 });
   try {
     const r = await fetch(`${API_BASE}/schedules`, {
       headers: bearerHeaders(token),
@@ -17,6 +18,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ ok: false }, { status: 401 });
   try {
     const body = await req.json();
     const r = await fetch(`${API_BASE}/schedules`, {

@@ -4,6 +4,7 @@ const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function POST(request: Request) {
   const token = await getServerAccessToken();
+  if (!token) return Response.json({ error: 'Unauthorized' }, { status: 401 });
   const url = new URL(request.url);
   const agent = url.searchParams.get('agent') ?? undefined;
   try {

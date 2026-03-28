@@ -5,6 +5,7 @@ const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ name: string }> }) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ memory: '', rules: '' }, { status: 401 });
   const { name } = await params;
   try {
     const headers = bearerHeaders(token);

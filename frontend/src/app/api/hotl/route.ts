@@ -5,6 +5,7 @@ const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function GET(req: NextRequest) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json([], { status: 401 });
   const { searchParams } = new URL(req.url);
   const agent      = searchParams.get('agent') ?? '';
   const unreadOnly = searchParams.get('unread_only') === 'true';
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ ok: false }, { status: 401 });
   try {
     const body = await req.json();
     const r = await fetch(`${API_BASE}/hotl`, {

@@ -5,6 +5,7 @@ const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function POST(req: NextRequest) {
   const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ ok: false }, { status: 401 });
   try {
     const body = await req.json().catch(() => ({}));
     const agent = body.agent ?? '';

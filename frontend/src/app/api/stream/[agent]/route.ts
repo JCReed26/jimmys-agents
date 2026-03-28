@@ -7,6 +7,7 @@ export async function GET(
   { params }: { params: Promise<{ agent: string }> }
 ) {
   const token = await getServerAccessToken();
+  if (!token) return new Response(null, { status: 401 });
   const { agent } = await params;
   try {
     const upstream = await fetch(`${API_BASE}/sse/${agent}/live`, {
