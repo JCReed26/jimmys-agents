@@ -89,7 +89,7 @@ async def trigger_agent_run(
     }
 
     translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
-    _publish_live(agent, translator.start())
+    _publish_live(tenant_id, agent, translator.start())
 
     try:
         async with httpx.AsyncClient(timeout=300) as client:
@@ -112,10 +112,10 @@ async def trigger_agent_run(
                         except json.JSONDecodeError:
                             continue
                         for ag_ui_line in translator.feed(current_event_type, data):
-                            _publish_live(agent, ag_ui_line)
+                            _publish_live(tenant_id, agent, ag_ui_line)
 
         for ag_ui_line in translator.finish():
-            _publish_live(agent, ag_ui_line)
+            _publish_live(tenant_id, agent, ag_ui_line)
 
         usage = translator.usage_metadata or {}
         token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
@@ -127,7 +127,7 @@ async def trigger_agent_run(
     except Exception as e:
         async with _pool.acquire() as conn:
             await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
-        _publish_live(agent, translator.error(str(e)))
+        _publish_live(tenant_id, agent, translator.error(str(e)))
 
 
 async def _reload_schedules():
@@ -422,12 +422,13 @@ async def agent_run(name: str, request: Request):
 
 
 @app.get("/sse/{agent}/live")
-async def sse_live(agent: str):
+async def sse_live(agent: str, request: Request):
     """
     Subscribe to AG-UI events from the currently-running scheduled task.
     Stays open, sends heartbeat comments every 15s to keep connection alive.
+    Scoped to requesting tenant — cannot receive another tenant's run events.
     """
-    q = _get_live_queue(agent)
+    q = _get_live_queue(request.state.tenant_id, agent)
 
     async def event_stream():
         while True:
@@ -445,11 +446,16 @@ async def sse_live(agent: str):
 
 
 @app.get("/chat/{agent}/history")
-async def chat_history(agent: str, thread_id: str):
+async def chat_history(agent: str, thread_id: str, request: Request):
     """
     Proxy to LangGraph thread state. Returns messages for session restore.
-    Returns {"messages": []} if agent is down or thread not found.
+    Validates thread_id belongs to requesting tenant before proxying.
+    Returns {"messages": []} if agent is down, thread not found, or tenant mismatch.
     """
+    tenant_id = request.state.tenant_id
+    if not thread_id.startswith(f"thread-{tenant_id}-"):
+        return {"messages": []}
+
     agent_cfg = registry.get(agent)
     if not agent_cfg or not agent_cfg.enabled:
         return {"messages": []}
@@ -479,15 +485,16 @@ _rate_buckets: dict[str, dict[str, list[float]]] = {}
 _live_queues: dict[str, asyncio.Queue] = {}
 
 
-def _get_live_queue(agent: str) -> asyncio.Queue:
-    if agent not in _live_queues:
-        _live_queues[agent] = asyncio.Queue(maxsize=500)
-    return _live_queues[agent]
+def _get_live_queue(tenant_id: str, agent: str) -> asyncio.Queue:
+    key = f"{tenant_id}:{agent}"
+    if key not in _live_queues:
+        _live_queues[key] = asyncio.Queue(maxsize=500)
+    return _live_queues[key]
 
 
-def _publish_live(agent: str, event_line: str) -> None:
-    """Non-blocking put to live queue. Silently drops if full."""
-    q = _get_live_queue(agent)
+def _publish_live(tenant_id: str, agent: str, event_line: str) -> None:
+    """Non-blocking put to tenant-scoped live queue. Silently drops if full."""
+    q = _get_live_queue(tenant_id, agent)
     try:
         q.put_nowait(event_line)
     except asyncio.QueueFull:
