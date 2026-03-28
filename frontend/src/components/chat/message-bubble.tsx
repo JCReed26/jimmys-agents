@@ -4,11 +4,13 @@ import { User, Bot } from 'lucide-react';
 import clsx from 'clsx';
 import { Thinking } from './thinking';
 
-interface MessageBubbleProps {
-  role: 'human' | 'ai' | 'system';
+export interface MessageBubbleProps {
+  role: 'human' | 'ai' | 'assistant' | 'system';
   content: string;
   thinking?: string;
   streaming?: boolean;
+  id?: string;
+  toolCalls?: Array<{ id: string; name: string; args: string; result?: string }>;
 }
 
 export function MessageBubble({ role, content, thinking, streaming }: MessageBubbleProps) {
