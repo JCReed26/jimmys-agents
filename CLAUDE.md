@@ -166,6 +166,12 @@ FastAPI on :8080. All paths:
 - **docs/issues.md is the living issue tracker**: Update it when bugs are fixed or new issues are found. This file is studied by Claude to maintain context across sessions.
 - **`make install` uses `$(PYTHON) -m pip`**: This ensures deps install to the correct Python 3.13 venv, not system Python.
 - **`--no-browser` on langgraph dev**: LangSmith Studio opens via `http://localhost:{port}` not `0.0.0.0`. Always use `--no-browser` in Makefile targets.
+- **Auth is Supabase (email OTP)**: Backend requires `SUPABASE_URL`, `SUPABASE_JWT_SECRET`, `DATABASE_URL` (Postgres). Frontend requires `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. See `.env.example`.
+- **DB is Postgres, not SQLite**: `backend/db_postgres.py` replaces `backend/db.py`. All queries use asyncpg with a module-level pool (`_pool`). The pool is set during FastAPI lifespan — never import db.py for new code.
+- **Multi-tenant: all queries scope by tenant_id**: JWT is verified in `backend/auth_middleware.py`; `tenant_id` is extracted and attached to `request.state`. Every DB function in `db_postgres.py` requires `tenant_id` as first arg.
+- **Thread IDs are namespaced**: Format is `thread-{tenant_id}-{agent}-{uuid4}`. The API validates the prefix on `/chat/{agent}/history` — never generate bare thread IDs. See `docs/deepagents.md` for the three-layer ownership model.
+- **APScheduler uses module-level `_pool`**: Scheduler jobs can't use `request.state`. `trigger_agent_run` and `_reload_schedules` in `api_server.py` use the global `_pool` directly — don't refactor to use request context.
+- **CORS preflight skips auth**: The `_auth` HTTP middleware in `api_server.py` skips `OPTIONS` requests to allow CORS preflight. This is intentional — never add auth checks to OPTIONS.
 
 ---
 

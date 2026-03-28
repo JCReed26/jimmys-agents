@@ -346,6 +346,42 @@ curl http://localhost:8080/hotl | python -m json.tool
 
 ---
 
+## Three-Layer Ownership Model
+
+Data and configuration in jimmys-agents is owned at three distinct layers. Each layer has its own storage, access pattern, and mutation rules.
+
+```
+Layer 1 — James (filesystem / git)
+  agent.py, skills/, CLAUDE.md, Makefile, agents.yaml
+  Owned by James. Edited by Claude Code. Committed to git.
+
+Layer 2 — Agent self-writes (Postgres: agent_memory, agent_rules)
+  Replaces MEMORY.md + RULES.md on the filesystem.
+  The agent reads/writes its own rows. No other tenant sees them.
+  Keyed on (tenant_id, agent_name).
+
+Layer 3 — Client/tenant config (Postgres: schedules, hitl, hotl, runs)
+  Everything scoped to tenant_id extracted from the Supabase JWT.
+  Dashboard reads/writes via the FastAPI gateway.
+  James has tenant_id = 4efdeb00-1b23-4031-bc77-555af005a406.
+```
+
+### Why This Exists
+
+Before this model, all state lived in SQLite (`data/state.db`) with no isolation. A single-user assumption was baked in everywhere. The three-layer model lets future clients each have their own silo while James retains full control of Layer 1 (code, skills, rules) that no tenant can touch.
+
+### Thread ID Namespacing
+
+Thread IDs are namespaced to prevent cross-tenant LangGraph state mixing:
+
+```
+thread-{tenant_id}-{agent_name}-{uuid4}
+```
+
+The API server validates this prefix on `/chat/{agent}/history` — requests for a thread that doesn't start with `thread-{your_tenant_id}-` return an empty response, not an error (avoids leaking existence).
+
+---
+
 ## Troubleshooting
 
 | Error | Fix |
