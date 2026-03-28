@@ -80,7 +80,8 @@ export default function SchedulesPage() {
   async function triggerNow(agent: string) {
     setTriggering(agent);
     try {
-      await fetch(`http://localhost:8080/schedules/${agent}/trigger`, { method: "POST" });
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+      await fetch(`${apiBase}/schedules/${agent}/trigger`, { method: "POST" });
     } finally {
       setTriggering("");
     }

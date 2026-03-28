@@ -82,6 +82,11 @@ def migrate():
         CREATE INDEX IF NOT EXISTS idx_sched_agent    ON schedules_v2(agent);
         """)
 
+        # Add thread_id to schedules_v2 if missing (safe to run multiple times)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(schedules_v2)").fetchall()]
+        if "thread_id" not in cols:
+            conn.execute("ALTER TABLE schedules_v2 ADD COLUMN thread_id TEXT")
+
         # Migrate existing schedules rows into schedules_v2
         old_tables = [r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='schedules'"
@@ -180,6 +185,18 @@ def hotl_mark_read(log_id: int | None = None, agent: str | None = None):
             conn.execute("UPDATE hotl_logs SET is_read=1")
 
 
+def hotl_clear(agent: str | None = None) -> int:
+    """Delete all HOTL logs. Returns count deleted."""
+    with _conn() as conn:
+        if agent:
+            count = conn.execute("SELECT COUNT(*) FROM hotl_logs WHERE agent=?", (agent,)).fetchone()[0]
+            conn.execute("DELETE FROM hotl_logs WHERE agent=?", (agent,))
+        else:
+            count = conn.execute("SELECT COUNT(*) FROM hotl_logs").fetchone()[0]
+            conn.execute("DELETE FROM hotl_logs")
+        return count
+
+
 # ─────────────────────────────────────────
 # Run records
 # ─────────────────────────────────────────
@@ -243,6 +260,15 @@ def schedule_get(agent: str, workflow: str = "default") -> dict | None:
             "SELECT * FROM schedules_v2 WHERE agent=? AND workflow=?", (agent, workflow)
         ).fetchone()
         return dict(r) if r else None
+
+
+def schedule_set_thread_id(agent: str, workflow: str, thread_id: str):
+    """Persist the thread_id used for a scheduled run so history is continuous."""
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE schedules_v2 SET thread_id=? WHERE agent=? AND workflow=?",
+            (thread_id, agent, workflow),
+        )
 
 
 def schedule_set_last_run(agent: str, next_run: str, workflow: str = "default"):

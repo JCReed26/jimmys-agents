@@ -26,7 +26,8 @@ export function LiveStream({ agent, accentColor, accentColorRgb }: LiveStreamPro
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const wsUrl = `ws://localhost:8080/ws/${agent}`;
+    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8080';
+    const wsUrl = `${apiBase.replace(/^http/, 'ws')}/ws/${agent}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

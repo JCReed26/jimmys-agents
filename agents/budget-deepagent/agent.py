@@ -1,8 +1,7 @@
 import os
-import httpx
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langchain.agents.middleware.types import AgentMiddleware
+from deepagents.middleware import AgentMiddleware
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -54,20 +53,6 @@ class BudgetSyncMiddleware(AgentMiddleware):
             sync_from_csv_to_sheets()
         except Exception as e:
             print(f"[BudgetSyncMiddleware] Post-sync failed: {e}")
-
-        # Post HOTL summary to dashboard
-        messages = state.get("messages", [])
-        last_msg = messages[-1].content if messages else ""
-        thread_id = runtime.config.get("configurable", {}).get("thread_id", "unknown") if runtime.config else "unknown"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post("http://localhost:8080/hotl", json={
-                    "agent": "budget",
-                    "run_id": thread_id,
-                    "summary": {"overview": last_msg, "tools": [], "thoughts": []},
-                })
-        except Exception as e:
-            print(f"[BudgetSyncMiddleware] HOTL post failed: {e}")
         return None
 
 

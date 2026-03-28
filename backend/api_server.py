@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend import db
 from backend.agent_registry import registry
+from backend.translator import StreamTranslator
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -50,7 +51,10 @@ scheduler = AsyncIOScheduler()
 
 
 async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: str | None = None):
-    """Fire a LangGraph /invoke call for scheduled (non-streaming) runs."""
+    """
+    Fire a LangGraph /runs/stream call for scheduled runs.
+    Translates to AG-UI, publishes to live queue, writes HOTL on completion.
+    """
     run_id = str(uuid.uuid4())
     db.run_start(agent, run_id)
 
@@ -59,18 +63,58 @@ async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: 
         db.run_finish(run_id, "error", error_msg="Agent not registered or disabled")
         return
 
+    # Get or create a stable thread_id for this schedule
+    sched = db.schedule_get(agent, workflow)
+    thread_id = (sched.get("thread_id") if sched else None) or f"thread-schedule-{agent}-{workflow}"
+    if sched and not sched.get("thread_id"):
+        db.schedule_set_thread_id(agent, workflow, thread_id)
+
     prompt = task_prompt or "Run your scheduled task."
-    payload = {"input": {"messages": [{"role": "user", "content": prompt}]}}
+    lg_payload = {
+        "assistant_id": "agent",
+        "input": {"messages": [{"role": "user", "content": prompt}]},
+        "config": {"configurable": {"thread_id": thread_id}},
+        "stream_mode": ["messages"],
+    }
+
+    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
+    _publish_live(agent, translator.start())
 
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            r = await client.post(f"{registry.base_url(agent)}/invoke", json=payload)
-            r.raise_for_status()
-            registry.record_success(agent)
-            db.run_finish(run_id, "done")
+            async with client.stream(
+                "POST",
+                f"{registry.base_url(agent)}/runs/stream",
+                json=lg_payload,
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+            ) as resp:
+                resp.raise_for_status()
+
+                current_event_type = "messages/partial"
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        for ag_ui_line in translator.feed(current_event_type, data):
+                            _publish_live(agent, ag_ui_line)
+
+        for ag_ui_line in translator.finish():
+            _publish_live(agent, ag_ui_line)
+
+        usage = translator.usage_metadata or {}
+        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        cost_usd = _estimate_cost(token_count)
+        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
+        db.hotl_create(agent, run_id, translator.hotl_summary)
+
     except Exception as e:
-        registry.record_failure(agent)
         db.run_finish(run_id, "error", error_msg=str(e))
+        _publish_live(agent, translator.error(str(e)))
 
 
 def _reload_schedules():
@@ -171,7 +215,7 @@ async def agents_status():
             }
             if agent.enabled:
                 try:
-                    r = await client.get(f"{registry.base_url(agent.name)}/ok")
+                    r = await client.get(f"{registry.base_url(agent.name)}/assistants")
                     entry["status"] = "RUNNING" if r.status_code == 200 else "DOWN"
                 except Exception:
                     entry["status"] = "DOWN"
@@ -206,55 +250,78 @@ async def agents_status():
 
 async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     """
-    Forward the POST body to the agent's /run endpoint and stream the SSE
-    response back verbatim. Records RUN_STARTED / RUN_FINISHED in run_records.
-    Emits a synthetic RUN_ERROR event on connection failure.
+    Call {agent_url}/runs/stream (LangGraph native SSE),
+    translate to AG-UI events, stream to browser.
+    Writes run_record and HOTL on completion.
     """
     run_id = str(uuid.uuid4())
     db.run_start(agent_name, run_id)
 
-    body = await request.body()
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        "X-Run-Id": run_id,
+    # Parse AG-UI request body
+    try:
+        body_bytes = await request.body()
+        req_data = json.loads(body_bytes) if body_bytes else {}
+    except Exception:
+        req_data = {}
+
+    thread_id = req_data.get("thread_id") or str(uuid.uuid4())
+    messages = req_data.get("messages", [])
+
+    # Build LangGraph payload
+    lg_payload = {
+        "assistant_id": "agent",
+        "input": {"messages": messages},
+        "config": {"configurable": {"thread_id": thread_id}},
+        "stream_mode": ["messages"],
     }
 
+    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
+    yield translator.start()
+
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
-                f"{registry.base_url(agent_name)}/run",
-                content=body,
-                headers=headers,
+                f"{registry.base_url(agent_name)}/runs/stream",
+                json=lg_payload,
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             ) as resp:
                 resp.raise_for_status()
                 registry.record_success(agent_name)
-                async for chunk in resp.aiter_text():
+
+                current_event_type = "messages/partial"
+                async for line in resp.aiter_lines():
                     if await request.is_disconnected():
                         break
-                    yield chunk
-        db.run_finish(run_id, "done")
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        for ag_ui_line in translator.feed(current_event_type, data):
+                            yield ag_ui_line
+
+        for ag_ui_line in translator.finish():
+            yield ag_ui_line
+
+        usage = translator.usage_metadata or {}
+        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        cost_usd = _estimate_cost(token_count)
+        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
+        db.hotl_create(agent_name, run_id, translator.hotl_summary)
 
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
         db.run_finish(run_id, "error", error_msg=str(e))
-        error_event = {
-            "type": "RUN_ERROR",
-            "runId": run_id,
-            "message": f"Agent returned HTTP {e.response.status_code}",
-        }
-        yield f"event: RUN_ERROR\ndata: {json.dumps(error_event)}\n\n"
+        yield translator.error(f"Agent returned HTTP {e.response.status_code}")
 
     except Exception as e:
         registry.record_failure(agent_name)
         db.run_finish(run_id, "error", error_msg=str(e))
-        error_event = {
-            "type": "RUN_ERROR",
-            "runId": run_id,
-            "message": str(e),
-        }
-        yield f"event: RUN_ERROR\ndata: {json.dumps(error_event)}\n\n"
+        yield translator.error(str(e))
 
 
 @app.post("/agents/{name}/run")
@@ -287,8 +354,83 @@ async def agent_run(name: str, request: Request):
     )
 
 
+@app.get("/sse/{agent}/live")
+async def sse_live(agent: str):
+    """
+    Subscribe to AG-UI events from the currently-running scheduled task.
+    Stays open, sends heartbeat comments every 15s to keep connection alive.
+    """
+    q = _get_live_queue(agent)
+
+    async def event_stream():
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=15.0)
+                yield event
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/chat/{agent}/history")
+async def chat_history(agent: str, thread_id: str):
+    """
+    Proxy to LangGraph thread state. Returns messages for session restore.
+    Returns {"messages": []} if agent is down or thread not found.
+    """
+    agent_cfg = registry.get(agent)
+    if not agent_cfg or not agent_cfg.enabled:
+        return {"messages": []}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                f"{registry.base_url(agent)}/threads/{thread_id}/state"
+            )
+            r.raise_for_status()
+            state = r.json()
+            # LangGraph thread state: {"values": {"messages": [...]}, ...}
+            messages_raw = state.get("values", {}).get("messages", [])
+            messages = [
+                {"role": "assistant" if m.get("type") == "ai" else "human",
+                 "content": m.get("content", "")}
+                for m in messages_raw
+                if m.get("type") in ("human", "ai")
+            ]
+            return {"messages": messages}
+    except Exception:
+        return {"messages": []}
+
+
 # Per-agent in-memory rate limit buckets: {agent: {ip: [timestamps]}}
 _rate_buckets: dict[str, dict[str, list[float]]] = {}
+
+# In-memory pub-sub for scheduled run live stream: {agent_name: asyncio.Queue}
+_live_queues: dict[str, asyncio.Queue] = {}
+
+
+def _get_live_queue(agent: str) -> asyncio.Queue:
+    if agent not in _live_queues:
+        _live_queues[agent] = asyncio.Queue(maxsize=500)
+    return _live_queues[agent]
+
+
+def _publish_live(agent: str, event_line: str) -> None:
+    """Non-blocking put to live queue. Silently drops if full."""
+    q = _get_live_queue(agent)
+    try:
+        q.put_nowait(event_line)
+    except asyncio.QueueFull:
+        pass
+
+
+def _estimate_cost(total_tokens: int) -> float:
+    """Rough Gemini 2.5 Flash cost estimate (~$0.50/1M tokens average)."""
+    return round(total_tokens * 0.0000005, 6)
 
 
 async def _check_rate_limit(agent_name: str, limit_str: str, request: Request):
@@ -384,6 +526,13 @@ def create_hotl(req: HotlCreateRequest):
     return {"id": log_id}
 
 
+@app.post("/hotl/clear")
+def clear_hotl(agent: str | None = None):
+    """Permanently delete HOTL logs. Destructive — confirm in UI before calling."""
+    deleted = db.hotl_clear(agent=agent)
+    return {"ok": True, "deleted": deleted}
+
+
 @app.post("/hotl/{log_id}/read")
 def mark_hotl_read(log_id: int):
     db.hotl_mark_read(log_id=log_id)
@@ -465,6 +614,15 @@ def _read_agent_file(name: str, filename: str) -> str:
     agent = registry.get(name)
     if not agent:
         return f"# {filename}\n\n_(Agent '{name}' not registered.)_\n"
+    # Memory: check skills/AGENTS.md first (deepagent convention), fall back to MEMORY.md
+    if filename == "MEMORY.md":
+        for candidate in (
+            PROJECT_ROOT / agent.dir / "skills" / "AGENTS.md",
+            PROJECT_ROOT / agent.dir / "MEMORY.md",
+        ):
+            if candidate.exists():
+                return candidate.read_text()
+        return "# Memory\n\n_(No content yet — written by the agent during runs.)_\n"
     path = PROJECT_ROOT / agent.dir / filename
     if path.exists():
         return path.read_text()
@@ -540,21 +698,29 @@ def global_search(q: str):
 
     for agent in registry.get_all():
         agent_dir = PROJECT_ROOT / agent.dir
-        for fname in ("MEMORY.md", "RULES.md"):
-            fpath = agent_dir / fname
+        candidates = [
+            (agent_dir / "skills" / "AGENTS.md", "memory"),
+            (agent_dir / "MEMORY.md", "memory"),
+            (agent_dir / "RULES.md", "rules"),
+        ]
+        seen_types: set[str] = set()
+        for fpath, ftype in candidates:
+            if ftype in seen_types:
+                continue  # already matched a memory file for this agent
             if fpath.exists():
                 content = fpath.read_text()
                 if q_lower in content.lower():
                     idx = content.lower().index(q_lower)
                     start = max(0, idx - 60)
-                    excerpt = content[start:idx + 60].strip()
+                    excerpt = content[start : idx + 60].strip()
                     results.append({
-                        "type": "memory" if fname == "MEMORY.md" else "rules",
+                        "type": ftype,
                         "agent": agent.name,
-                        "id": fname,
+                        "id": fpath.name,
                         "excerpt": excerpt,
                         "created_at": None,
                     })
+                    seen_types.add(ftype)
 
     return {"results": results[:50]}
 
