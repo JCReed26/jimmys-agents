@@ -215,7 +215,7 @@ async def agents_status():
             }
             if agent.enabled:
                 try:
-                    r = await client.get(f"{registry.base_url(agent.name)}/ok")
+                    r = await client.get(f"{registry.base_url(agent.name)}/assistants")
                     entry["status"] = "RUNNING" if r.status_code == 200 else "DOWN"
                 except Exception:
                     entry["status"] = "DOWN"
@@ -377,6 +377,35 @@ async def sse_live(agent: str):
     )
 
 
+@app.get("/chat/{agent}/history")
+async def chat_history(agent: str, thread_id: str):
+    """
+    Proxy to LangGraph thread state. Returns messages for session restore.
+    Returns {"messages": []} if agent is down or thread not found.
+    """
+    agent_cfg = registry.get(agent)
+    if not agent_cfg or not agent_cfg.enabled:
+        return {"messages": []}
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(
+                f"{registry.base_url(agent)}/threads/{thread_id}/state"
+            )
+            r.raise_for_status()
+            state = r.json()
+            # LangGraph thread state: {"values": {"messages": [...]}, ...}
+            messages_raw = state.get("values", {}).get("messages", [])
+            messages = [
+                {"role": "assistant" if m.get("type") == "ai" else "human",
+                 "content": m.get("content", "")}
+                for m in messages_raw
+                if m.get("type") in ("human", "ai")
+            ]
+            return {"messages": messages}
+    except Exception:
+        return {"messages": []}
+
+
 # Per-agent in-memory rate limit buckets: {agent: {ip: [timestamps]}}
 _rate_buckets: dict[str, dict[str, list[float]]] = {}
 
@@ -497,6 +526,13 @@ def create_hotl(req: HotlCreateRequest):
     return {"id": log_id}
 
 
+@app.post("/hotl/clear")
+def clear_hotl(agent: str | None = None):
+    """Permanently delete HOTL logs. Destructive — confirm in UI before calling."""
+    deleted = db.hotl_clear(agent=agent)
+    return {"ok": True, "deleted": deleted}
+
+
 @app.post("/hotl/{log_id}/read")
 def mark_hotl_read(log_id: int):
     db.hotl_mark_read(log_id=log_id)
@@ -578,6 +614,15 @@ def _read_agent_file(name: str, filename: str) -> str:
     agent = registry.get(name)
     if not agent:
         return f"# {filename}\n\n_(Agent '{name}' not registered.)_\n"
+    # Memory: check skills/AGENTS.md first (deepagent convention), fall back to MEMORY.md
+    if filename == "MEMORY.md":
+        for candidate in (
+            PROJECT_ROOT / agent.dir / "skills" / "AGENTS.md",
+            PROJECT_ROOT / agent.dir / "MEMORY.md",
+        ):
+            if candidate.exists():
+                return candidate.read_text()
+        return "# Memory\n\n_(No content yet — written by the agent during runs.)_\n"
     path = PROJECT_ROOT / agent.dir / filename
     if path.exists():
         return path.read_text()
@@ -653,21 +698,29 @@ def global_search(q: str):
 
     for agent in registry.get_all():
         agent_dir = PROJECT_ROOT / agent.dir
-        for fname in ("MEMORY.md", "RULES.md"):
-            fpath = agent_dir / fname
+        candidates = [
+            (agent_dir / "skills" / "AGENTS.md", "memory"),
+            (agent_dir / "MEMORY.md", "memory"),
+            (agent_dir / "RULES.md", "rules"),
+        ]
+        seen_types: set[str] = set()
+        for fpath, ftype in candidates:
+            if ftype in seen_types:
+                continue  # already matched a memory file for this agent
             if fpath.exists():
                 content = fpath.read_text()
                 if q_lower in content.lower():
                     idx = content.lower().index(q_lower)
                     start = max(0, idx - 60)
-                    excerpt = content[start:idx + 60].strip()
+                    excerpt = content[start : idx + 60].strip()
                     results.append({
-                        "type": "memory" if fname == "MEMORY.md" else "rules",
+                        "type": ftype,
                         "agent": agent.name,
-                        "id": fname,
+                        "id": fpath.name,
                         "excerpt": excerpt,
                         "created_at": None,
                     })
+                    seen_types.add(ftype)
 
     return {"results": results[:50]}
 
