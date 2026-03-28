@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState, useCallback } from "react";
+import { use, useEffect, useRef, useState, useCallback } from "react";
 import { WORKFLOWS, AGENTS } from "@/lib/agents";
 import { useAgentChat } from "@/hooks/use-agent-chat";
 import { useAgUiStream } from "@/hooks/use-ag-ui-stream";
@@ -67,6 +67,10 @@ export default function WorkflowPage({ params }: { params: Promise<{ name: strin
   const [selectedAgent, setSelectedAgent] = useState(COMPONENT_AGENTS[0].key);
   const [chatInput, setChatInput] = useState("");
   const { messages, sendMessage, isLoading: chatLoading } = useAgentChat(selectedAgent);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const loadData = useCallback(async () => {
     try {
@@ -92,7 +96,8 @@ export default function WorkflowPage({ params }: { params: Promise<{ name: strin
   async function triggerRun() {
     setTriggering(true);
     try {
-      await fetch(`http://localhost:8080/schedules/${name}/trigger`, { method: "POST" });
+      const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+      await fetch(`${apiBase}/schedules/${name}/trigger`, { method: "POST" });
       stream.clearRun();
     } finally {
       setTriggering(false);
@@ -371,6 +376,7 @@ export default function WorkflowPage({ params }: { params: Promise<{ name: strin
                     {msg.content || <span className="italic text-muted-foreground/60">thinking…</span>}
                   </div>
                 ))}
+                <div ref={chatBottomRef} />
               </div>
 
               {/* Input */}

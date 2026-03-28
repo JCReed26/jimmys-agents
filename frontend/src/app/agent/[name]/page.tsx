@@ -131,7 +131,8 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
   }
 
   async function triggerNow() {
-    await fetch(`http://localhost:8080/schedules/${name}/trigger`, { method: "POST" });
+    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
+    await fetch(`${apiBase}/schedules/${name}/trigger`, { method: "POST" });
   }
 
   async function resolveHitl(id: number, decision: "approved" | "rejected") {
