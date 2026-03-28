@@ -1,15 +1,18 @@
-const API_BASE = process.env.AGENT_API_URL ?? "http://localhost:8080";
+import { getServerAccessToken, bearerHeaders } from '@/lib/auth-server';
+
+const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
 export async function POST(request: Request) {
+  const token = await getServerAccessToken();
   const url = new URL(request.url);
-  const agent = url.searchParams.get("agent") ?? undefined;
+  const agent = url.searchParams.get('agent') ?? undefined;
   try {
     const upstream = await fetch(
-      `${API_BASE}/hotl/clear${agent ? `?agent=${encodeURIComponent(agent)}` : ""}`,
-      { method: "POST" }
+      `${API_BASE}/hotl/clear${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`,
+      { method: 'POST', headers: bearerHeaders(token) }
     );
     if (!upstream.ok) {
-      return Response.json({ error: "Gateway error" }, { status: upstream.status });
+      return Response.json({ error: 'Gateway error' }, { status: upstream.status });
     }
     return Response.json(await upstream.json());
   } catch (err) {

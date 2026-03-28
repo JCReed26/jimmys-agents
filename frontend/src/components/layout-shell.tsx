@@ -2,13 +2,14 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Mail, Calendar, DollarSign, GitBranch,
   LayoutDashboard, Inbox, ScrollText, Activity,
   CalendarClock, Settings, User, ChevronRight,
-  Zap, BarChart3, PanelLeft,
+  Zap, BarChart3, PanelLeft, LogOut,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,9 @@ const systemLinks = [
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [counts, setCounts] = useState<NavCounts>({ hitl: 0, hotlUnread: 0 });
+  const [tenantName, setTenantName] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchCounts() {
@@ -68,10 +71,26 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
         if (r.ok) setCounts(await r.json());
       } catch { /* silently ignore */ }
     }
+    async function fetchMe() {
+      try {
+        const r = await fetch("/api/me", { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          setTenantName(data.tenant_name ?? null);
+        }
+      } catch { /* silently ignore */ }
+    }
     fetchCounts();
+    fetchMe();
     const iv = setInterval(fetchCounts, 15000);
     return () => clearInterval(iv);
   }, []);
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
 
   const monitoringLinks = [
     { href: "/observe",   label: "Observability", icon: BarChart3 },
@@ -161,6 +180,26 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               <NavItem key={item.href} {...item} pathname={pathname} />
             ))}
           </SidebarMenu>
+          {/* User pill */}
+          <div className="flex items-center justify-between px-2 py-2 rounded-md hover:bg-sidebar-accent/40 transition-colors">
+            <div className="flex items-center gap-2 min-w-0 group-data-[collapsible=icon]:hidden">
+              <div className="h-6 w-6 rounded-full bg-sidebar-accent flex items-center justify-center shrink-0">
+                <User className="h-3 w-3 text-muted-foreground" />
+              </div>
+              <span className="text-xs text-muted-foreground truncate">
+                {tenantName ?? "…"}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={handleSignOut}
+              title="Sign out"
+            >
+              <LogOut className="h-3 w-3" />
+            </Button>
+          </div>
         </SidebarFooter>
       </Sidebar>
 
