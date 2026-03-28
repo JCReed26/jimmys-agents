@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend import db
 from backend.agent_registry import registry
+from backend.translator import StreamTranslator
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -206,55 +207,78 @@ async def agents_status():
 
 async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     """
-    Forward the POST body to the agent's /run endpoint and stream the SSE
-    response back verbatim. Records RUN_STARTED / RUN_FINISHED in run_records.
-    Emits a synthetic RUN_ERROR event on connection failure.
+    Call {agent_url}/runs/stream (LangGraph native SSE),
+    translate to AG-UI events, stream to browser.
+    Writes run_record and HOTL on completion.
     """
     run_id = str(uuid.uuid4())
     db.run_start(agent_name, run_id)
 
-    body = await request.body()
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        "X-Run-Id": run_id,
+    # Parse AG-UI request body
+    try:
+        body_bytes = await request.body()
+        req_data = json.loads(body_bytes) if body_bytes else {}
+    except Exception:
+        req_data = {}
+
+    thread_id = req_data.get("thread_id") or str(uuid.uuid4())
+    messages = req_data.get("messages", [])
+
+    # Build LangGraph payload
+    lg_payload = {
+        "assistant_id": "agent",
+        "input": {"messages": messages},
+        "config": {"configurable": {"thread_id": thread_id}},
+        "stream_mode": ["messages"],
     }
 
+    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
+    yield translator.start()
+
     try:
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
-                f"{registry.base_url(agent_name)}/run",
-                content=body,
-                headers=headers,
+                f"{registry.base_url(agent_name)}/runs/stream",
+                json=lg_payload,
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             ) as resp:
                 resp.raise_for_status()
                 registry.record_success(agent_name)
-                async for chunk in resp.aiter_text():
+
+                current_event_type = "messages/partial"
+                async for line in resp.aiter_lines():
                     if await request.is_disconnected():
                         break
-                    yield chunk
-        db.run_finish(run_id, "done")
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        for ag_ui_line in translator.feed(current_event_type, data):
+                            yield ag_ui_line
+
+        for ag_ui_line in translator.finish():
+            yield ag_ui_line
+
+        usage = translator.usage_metadata or {}
+        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        cost_usd = _estimate_cost(token_count)
+        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
+        db.hotl_create(agent_name, run_id, translator.hotl_summary)
 
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
         db.run_finish(run_id, "error", error_msg=str(e))
-        error_event = {
-            "type": "RUN_ERROR",
-            "runId": run_id,
-            "message": f"Agent returned HTTP {e.response.status_code}",
-        }
-        yield f"event: RUN_ERROR\ndata: {json.dumps(error_event)}\n\n"
+        yield translator.error(f"Agent returned HTTP {e.response.status_code}")
 
     except Exception as e:
         registry.record_failure(agent_name)
         db.run_finish(run_id, "error", error_msg=str(e))
-        error_event = {
-            "type": "RUN_ERROR",
-            "runId": run_id,
-            "message": str(e),
-        }
-        yield f"event: RUN_ERROR\ndata: {json.dumps(error_event)}\n\n"
+        yield translator.error(str(e))
 
 
 @app.post("/agents/{name}/run")
@@ -289,6 +313,11 @@ async def agent_run(name: str, request: Request):
 
 # Per-agent in-memory rate limit buckets: {agent: {ip: [timestamps]}}
 _rate_buckets: dict[str, dict[str, list[float]]] = {}
+
+
+def _estimate_cost(total_tokens: int) -> float:
+    """Rough Gemini 2.5 Flash cost estimate (~$0.50/1M tokens average)."""
+    return round(total_tokens * 0.0000005, 6)
 
 
 async def _check_rate_limit(agent_name: str, limit_str: str, request: Request):
