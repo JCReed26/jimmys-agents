@@ -15,6 +15,7 @@ python-jobspy
 playwright
 gspread
 pytest
+pytest-asyncio
 fastapi
 uvicorn[standard]
 aiohttp
