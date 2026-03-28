@@ -51,7 +51,10 @@ scheduler = AsyncIOScheduler()
 
 
 async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: str | None = None):
-    """Fire a LangGraph /invoke call for scheduled (non-streaming) runs."""
+    """
+    Fire a LangGraph /runs/stream call for scheduled runs.
+    Translates to AG-UI, publishes to live queue, writes HOTL on completion.
+    """
     run_id = str(uuid.uuid4())
     db.run_start(agent, run_id)
 
@@ -60,18 +63,58 @@ async def trigger_agent_run(agent: str, workflow: str = "default", task_prompt: 
         db.run_finish(run_id, "error", error_msg="Agent not registered or disabled")
         return
 
+    # Get or create a stable thread_id for this schedule
+    sched = db.schedule_get(agent, workflow)
+    thread_id = (sched.get("thread_id") if sched else None) or f"thread-schedule-{agent}-{workflow}"
+    if sched and not sched.get("thread_id"):
+        db.schedule_set_thread_id(agent, workflow, thread_id)
+
     prompt = task_prompt or "Run your scheduled task."
-    payload = {"input": {"messages": [{"role": "user", "content": prompt}]}}
+    lg_payload = {
+        "assistant_id": "agent",
+        "input": {"messages": [{"role": "user", "content": prompt}]},
+        "config": {"configurable": {"thread_id": thread_id}},
+        "stream_mode": ["messages"],
+    }
+
+    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
+    _publish_live(agent, translator.start())
 
     try:
         async with httpx.AsyncClient(timeout=300) as client:
-            r = await client.post(f"{registry.base_url(agent)}/invoke", json=payload)
-            r.raise_for_status()
-            registry.record_success(agent)
-            db.run_finish(run_id, "done")
+            async with client.stream(
+                "POST",
+                f"{registry.base_url(agent)}/runs/stream",
+                json=lg_payload,
+                headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
+            ) as resp:
+                resp.raise_for_status()
+
+                current_event_type = "messages/partial"
+                async for line in resp.aiter_lines():
+                    if line.startswith("event: "):
+                        current_event_type = line[7:].strip()
+                    elif line.startswith("data: "):
+                        data_str = line[6:]
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+                        for ag_ui_line in translator.feed(current_event_type, data):
+                            _publish_live(agent, ag_ui_line)
+
+        for ag_ui_line in translator.finish():
+            _publish_live(agent, ag_ui_line)
+
+        usage = translator.usage_metadata or {}
+        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        cost_usd = _estimate_cost(token_count)
+        db.run_finish(run_id, "done", token_count=token_count, cost_usd=cost_usd)
+        db.hotl_create(agent, run_id, translator.hotl_summary)
+
     except Exception as e:
-        registry.record_failure(agent)
         db.run_finish(run_id, "error", error_msg=str(e))
+        _publish_live(agent, translator.error(str(e)))
 
 
 def _reload_schedules():
@@ -311,8 +354,49 @@ async def agent_run(name: str, request: Request):
     )
 
 
+@app.get("/sse/{agent}/live")
+async def sse_live(agent: str):
+    """
+    Subscribe to AG-UI events from the currently-running scheduled task.
+    Stays open, sends heartbeat comments every 15s to keep connection alive.
+    """
+    q = _get_live_queue(agent)
+
+    async def event_stream():
+        while True:
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=15.0)
+                yield event
+            except asyncio.TimeoutError:
+                yield ": heartbeat\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 # Per-agent in-memory rate limit buckets: {agent: {ip: [timestamps]}}
 _rate_buckets: dict[str, dict[str, list[float]]] = {}
+
+# In-memory pub-sub for scheduled run live stream: {agent_name: asyncio.Queue}
+_live_queues: dict[str, asyncio.Queue] = {}
+
+
+def _get_live_queue(agent: str) -> asyncio.Queue:
+    if agent not in _live_queues:
+        _live_queues[agent] = asyncio.Queue(maxsize=500)
+    return _live_queues[agent]
+
+
+def _publish_live(agent: str, event_line: str) -> None:
+    """Non-blocking put to live queue. Silently drops if full."""
+    q = _get_live_queue(agent)
+    try:
+        q.put_nowait(event_line)
+    except asyncio.QueueFull:
+        pass
 
 
 def _estimate_cost(total_tokens: int) -> float:
