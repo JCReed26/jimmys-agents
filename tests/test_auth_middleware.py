@@ -99,3 +99,20 @@ def test_no_tenant_returns_403(monkeypatch):
     token = make_token()
     resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 403
+
+def test_wrong_issuer_returns_401(monkeypatch):
+    """Token signed with correct secret but from a different Supabase project must be rejected."""
+    app = make_app(monkeypatch)
+    client = TestClient(app, raise_server_exceptions=False)
+    token = jwt.encode(
+        {
+            "sub": TEST_USER_ID,
+            "aud": "authenticated",
+            "exp": int(time.time() + 3600),
+            "iss": "https://other-project.supabase.co/auth/v1",  # wrong issuer
+        },
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+    resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
