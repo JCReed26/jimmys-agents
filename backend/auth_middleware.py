@@ -6,6 +6,15 @@ from jose import jwt, JWTError
 
 SKIP_PATHS = {"/ok", "/docs", "/openapi.json", "/redoc"}
 
+# Internal key bypass: agents posting HOTL logs don't carry a JWT.
+# Only applies to POST /hotl. Disabled entirely if INTERNAL_API_KEY is unset.
+_INTERNAL_BYPASS_PATH = "/hotl"
+_INTERNAL_BYPASS_METHOD = "POST"
+
+
+def _get_internal_api_key() -> str:
+    return os.environ.get("INTERNAL_API_KEY", "")
+
 
 def validate_env() -> None:
     """Call during app startup to fail fast if required vars are missing."""
@@ -28,6 +37,21 @@ def _get_issuer() -> str:
 async def auth_middleware(request: Request, call_next):
     if request.url.path in SKIP_PATHS:
         return await call_next(request)
+
+    # Internal agent bypass: POST /hotl only, and only when INTERNAL_API_KEY is configured.
+    internal_key = _get_internal_api_key()
+    if (
+        internal_key
+        and request.method == _INTERNAL_BYPASS_METHOD
+        and request.url.path == _INTERNAL_BYPASS_PATH
+    ):
+        provided = request.headers.get("X-Internal-Key", "")
+        if provided == internal_key:
+            request.state.tenant_id = "internal"
+            request.state.user_id = "internal"
+            return await call_next(request)
+        # Key was provided but wrong — fail immediately (don't fall through to JWT)
+        return JSONResponse(status_code=401, content={"detail": "Invalid internal key"})
 
     auth_header = request.headers.get("Authorization", "")
     if not auth_header.startswith("Bearer "):

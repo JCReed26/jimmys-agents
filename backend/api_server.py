@@ -164,6 +164,16 @@ async def _reload_schedules():
             except Exception:
                 pass  # invalid cron — skip silently
 
+        # M-07: reflect the enabled state back to DB so the toggle is consistent
+        async with _pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE schedules SET enabled=$1
+                WHERE tenant_id=$2 AND agent=$3 AND workflow=$4
+                """,
+                row["enabled"], row["tenant_id"], row["agent"], row["workflow"],
+            )
+
 
 async def _init_conn(conn):
     """Register JSON/JSONB codecs so asyncpg returns Python dicts."""
