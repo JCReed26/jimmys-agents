@@ -47,10 +47,6 @@ const agentLinks = [
   { href: "/agent/budget-agent",   label: "Budget",   icon: DollarSign,  color: "var(--agent-budget)" },
 ];
 
-const workflowLinks = [
-  { href: "/workflow/job-app-chain", label: "Job Applications", icon: GitBranch, color: "var(--agent-job)" },
-];
-
 const systemLinks = [
   { href: "/profile",   label: "Profile",  icon: User },
   { href: "/settings",  label: "Settings", icon: Settings },
@@ -115,7 +111,11 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-[var(--agent-calendar)]" />
             <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
-              {tenantName || "Loading..."}
+              {tenantName ? (
+                tenantName.length > 20 ? `${tenantName.substring(0, 17)}...` : tenantName
+              ) : (
+                <Skeleton className="h-4 w-24 inline-block" />
+              )}
             </span>
           </Link>
         </SidebarHeader>
@@ -142,22 +142,6 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
             <SidebarGroupContent>
               <SidebarMenu>
                 {agentLinks.map((item) => (
-                  <NavItem key={item.href} {...item} pathname={pathname} accentColor={item.color} />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <Separator className="mx-2 my-1 bg-sidebar-border" />
-
-          {/* Workflows */}
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
-              Workflows
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {workflowLinks.map((item) => (
                   <NavItem key={item.href} {...item} pathname={pathname} accentColor={item.color} />
                 ))}
               </SidebarMenu>

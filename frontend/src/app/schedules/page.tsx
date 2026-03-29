@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 
 interface Schedule {
   agent: string;
+  workflow: string;
   cron_expr: string;
   enabled: number;
   task_prompt?: string;
@@ -60,15 +61,15 @@ export default function SchedulesPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function saveSchedule(agent: string) {
+  async function saveSchedule(agent: string, workflow: string) {
     setSaving(true);
     try {
       await fetch("/api/schedules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, ...editValues }),
+        body: JSON.stringify({ agent, workflow, ...editValues }),
       });
-      setSaved(agent);
+      setSaved(`${agent}-${workflow}`);
       setTimeout(() => setSaved(""), 2000);
       setEditing(null);
       load();
@@ -77,20 +78,57 @@ export default function SchedulesPage() {
     }
   }
 
-  async function triggerNow(agent: string) {
-    setTriggering(agent);
+  async function deleteSchedule(agent: string, workflow: string) {
+    if (!confirm("Are you sure you want to delete this schedule?")) return;
+    setSaving(true);
+    try {
+      await fetch(`/api/schedules/${agent}/${workflow}`, {
+        method: "DELETE",
+      });
+      setEditing(null);
+      load();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function triggerNow(agent: string, workflow: string) {
+    setTriggering(`${agent}-${workflow}`);
     try {
       const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-      await fetch(`${apiBase}/schedules/${agent}/trigger`, { method: "POST" });
+      await fetch(`${apiBase}/schedules/${agent}/trigger?workflow=${workflow}`, { method: "POST" });
     } finally {
       setTriggering("");
     }
   }
 
+  function handleAddSchedule(agent: string) {
+    const newWorkflow = `schedule-${Date.now()}`;
+    const newSched: Schedule = {
+      agent,
+      workflow: newWorkflow,
+      cron_expr: "*/30 * * * *",
+      enabled: 1,
+    };
+    setSchedules((prev) => [...prev, newSched]);
+    setEditing(`${agent}-${newWorkflow}`);
+    setEditValues({
+      cron_expr: "*/30 * * * *",
+      enabled: 1,
+      task_prompt: "",
+    });
+  }
+
   const agentKeys = Object.keys(AGENTS);
-  const rows = agentKeys.map(
-    (name) => schedules.find((s) => s.agent === name) ?? { agent: name, cron_expr: "*/30 * * * *", enabled: 1 } as Schedule
-  );
+  
+  // Group schedules by agent, and add a default one if none exists
+  const groupedSchedules = agentKeys.map((name) => {
+    const agentSchedules = schedules.filter((s) => s.agent === name);
+    if (agentSchedules.length === 0) {
+      return [{ agent: name, workflow: "default", cron_expr: "*/30 * * * *", enabled: 0 } as Schedule];
+    }
+    return agentSchedules;
+  });
 
   return (
     <div className="max-w-3xl mx-auto space-y-4">

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AGENTS, WORKFLOWS } from "@/lib/agents";
+import { AGENTS } from "@/lib/agents";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,7 @@ export default function SettingsPage() {
     }
   }
 
-  const allSources = { ...AGENTS, ...WORKFLOWS };
+  const allSources = { ...AGENTS };
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">

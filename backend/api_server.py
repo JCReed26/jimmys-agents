@@ -744,17 +744,15 @@ async def finish_run_endpoint(run_id: str, req: RunFinishRequest, request: Reque
 
 class ScheduleUpsertRequest(BaseModel):
     agent: str
-    workflow: str = "default"
+    workflow: str = "default"  # Use unique names here for multiple schedules
     cron_expr: str
     enabled: bool = True
     task_prompt: str = ""
-
 
 @app.get("/schedules")
 async def list_schedules_endpoint(request: Request):
     async with request.app.state.pool.acquire() as conn:
         return await db.list_schedules(conn, request.state.tenant_id)
-
 
 @app.post("/schedules")
 async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request):
@@ -768,6 +766,13 @@ async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request)
             req.enabled,
             req.task_prompt or None,
         )
+    await _reload_schedules()
+    return {"ok": True}
+
+@app.delete("/schedules/{agent}/{workflow}")
+async def delete_schedule_endpoint(agent: str, workflow: str, request: Request):
+    async with request.app.state.pool.acquire() as conn:
+        await db.delete_schedule(conn, request.state.tenant_id, agent, workflow)
     await _reload_schedules()
     return {"ok": True}
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AGENTS, WORKFLOWS } from "@/lib/agents";
+import { AGENTS } from "@/lib/agents";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -77,7 +77,6 @@ export default function DashboardPage() {
   const { agentData, activity, stats, loading } = useData();
 
   const agentEntries = Object.entries(AGENTS);
-  const workflowEntries = Object.entries(WORKFLOWS);
   const allStatuses = Object.values(agentData);
   const runningCount = allStatuses.filter((s) => s.status === "RUNNING").length;
   const hitlTotal = allStatuses.reduce((n, s) => n + (s.hitlCount ?? 0), 0);
@@ -95,10 +94,10 @@ export default function DashboardPage() {
           loading={loading}
         />
         <StatCard
-          label="Workflows"
-          value={`${workflowEntries.length}`}
-          sub={`${agentData["job-app-chain"]?.totalRuns ?? 0} total runs`}
-          icon={<GitBranch className="h-4 w-4" />}
+          label="Runs Today"
+          value={`${stats?.total_runs ?? 0}`}
+          sub="across all agents"
+          icon={<Activity className="h-4 w-4" />}
           loading={loading}
         />
         <StatCard
@@ -112,27 +111,18 @@ export default function DashboardPage() {
         <StatCard
           label="Cost Today"
           value={`$${costToday.toFixed(2)}`}
-          sub={`${stats?.total_runs ?? "—"} runs total`}
+          sub={`${stats?.total_tokens ?? 0} tokens`}
           icon={<DollarSign className="h-4 w-4" />}
           loading={loading}
         />
       </div>
 
-      {/* Agents + Workflows */}
+      {/* Agents */}
       <div>
         <SectionLabel>Agents</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {agentEntries.map(([key, cfg]) => (
             <AgentCard key={key} agentKey={key} cfg={cfg} status={agentData[key]} loading={loading} />
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <SectionLabel>Workflows</SectionLabel>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {workflowEntries.map(([key, cfg]) => (
-            <WorkflowCard key={key} agentKey={key} cfg={cfg} status={agentData[key]} loading={loading} />
           ))}
         </div>
       </div>
@@ -277,9 +267,6 @@ function AgentCard({
   );
 }
 
-function WorkflowCard({
-  agentKey, cfg, status, loading,
-}: {
   agentKey: string;
   cfg: typeof WORKFLOWS[string];
   status?: AgentStatus;
@@ -354,7 +341,7 @@ function WorkflowCard({
 }
 
 function ActivityRow({ entry }: { entry: HotlEntry }) {
-  const allAgents = { ...AGENTS, ...WORKFLOWS };
+  const allAgents = { ...AGENTS };
   const cfg = allAgents[entry.agent];
   const accentColor = cfg?.accentColor ?? "#888";
 

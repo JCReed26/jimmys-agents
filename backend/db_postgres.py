@@ -218,6 +218,13 @@ async def upsert_schedule(conn, tenant_id: str, agent: str, workflow: str, cron_
     return dict(row)
 
 
+async def delete_schedule(conn, tenant_id: str, agent: str, workflow: str) -> None:
+    await conn.execute(
+        "DELETE FROM schedules WHERE tenant_id=$1 AND agent=$2 AND workflow=$3",
+        tenant_id, agent, workflow
+    )
+
+
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 async def get_stats(conn, tenant_id: str) -> dict:

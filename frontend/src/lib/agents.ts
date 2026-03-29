@@ -1,4 +1,4 @@
-import { LucideIcon, Mail, Calendar, DollarSign, GitBranch } from 'lucide-react';
+import { LucideIcon, Mail, Calendar, DollarSign, Search } from 'lucide-react';
 
 export interface AgentConfig {
   name: string;
@@ -9,7 +9,7 @@ export interface AgentConfig {
   description: string;
   accentColor: string;
   accentColorRgb: string;
-  type: 'agent' | 'workflow';
+  type: 'agent';
 }
 
 /** Conversational chatbot agents — chat is the primary interface */
@@ -47,27 +47,22 @@ export const AGENTS: Record<string, AgentConfig> = {
     accentColorRgb: "168,85,247",
     type: "agent",
   },
-};
-
-/** Deterministic graph automations — graph visualization is the primary interface */
-export const WORKFLOWS: Record<string, AgentConfig> = {
-  "job-app-chain": {
-    name: "job-app-chain",
-    displayName: "Job Applications",
+  "job-search-agent": {
+    name: "job-search-agent",
+    displayName: "Job Search",
     url: "http://localhost:8004",
     port: 8004,
-    icon: GitBranch,
-    description: "LangGraph workflow: scrape → classify → optimize → apply",
+    icon: Search,
+    description: "Agentic job search and application workflows",
     accentColor: "#f59e0b",
     accentColorRgb: "245,158,11",
-    type: "workflow",
+    type: "agent",
   },
 };
 
 /** All sources combined (for shared monitoring pages) */
 export const ALL_SOURCES: Record<string, AgentConfig> = {
   ...AGENTS,
-  ...WORKFLOWS,
 };
 
 export function getAgent(name: string): AgentConfig | undefined {
@@ -75,5 +70,4 @@ export function getAgent(name: string): AgentConfig | undefined {
 }
 
 export const AGENT_NAMES = Object.keys(AGENTS);
-export const WORKFLOW_NAMES = Object.keys(WORKFLOWS);
 export const ALL_SOURCE_NAMES = Object.keys(ALL_SOURCES);
