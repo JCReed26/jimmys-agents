@@ -141,31 +141,32 @@ async def _reload_schedules():
             "SELECT tenant_id::text, agent, workflow, cron_expr, enabled, task_prompt, thread_id::text FROM schedules"
         )
 
-    for row in rows:
-        job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['workflow']}"
-        if scheduler.get_job(job_id):
-            scheduler.remove_job(job_id)
-        if row["enabled"]:
-            try:
-                trigger = CronTrigger.from_crontab(row["cron_expr"])
-                scheduler.add_job(
-                    trigger_agent_run,
-                    trigger=trigger,
-                    id=job_id,
-                    kwargs={
-                        "tenant_id": row["tenant_id"],
-                        "agent": row["agent"],
-                        "workflow": row["workflow"],
-                        "task_prompt": row.get("task_prompt"),
-                        "thread_id": row.get("thread_id"),
-                    },
-                    replace_existing=True,
-                )
-            except Exception:
-                pass  # invalid cron — skip silently
+    # M-07: one connection for the whole batch of UPDATE writes
+    async with _pool.acquire() as conn:
+        for row in rows:
+            job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['workflow']}"
+            if scheduler.get_job(job_id):
+                scheduler.remove_job(job_id)
+            if row["enabled"]:
+                try:
+                    trigger = CronTrigger.from_crontab(row["cron_expr"])
+                    scheduler.add_job(
+                        trigger_agent_run,
+                        trigger=trigger,
+                        id=job_id,
+                        kwargs={
+                            "tenant_id": row["tenant_id"],
+                            "agent": row["agent"],
+                            "workflow": row["workflow"],
+                            "task_prompt": row.get("task_prompt"),
+                            "thread_id": row.get("thread_id"),
+                        },
+                        replace_existing=True,
+                    )
+                except Exception:
+                    pass  # invalid cron — skip silently
 
-        # M-07: reflect the enabled state back to DB so the toggle is consistent
-        async with _pool.acquire() as conn:
+            # Reflect the enabled state back to DB so the toggle is consistent
             await conn.execute(
                 """
                 UPDATE schedules SET enabled=$1

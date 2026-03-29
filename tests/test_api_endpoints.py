@@ -147,9 +147,9 @@ async def test_clear_hotl_logs_scoped_to_tenant():
     await clear_hotl_logs(conn, TENANT_ID)
 
     conn.execute.assert_called_once()
-    call_args = str(conn.execute.call_args)
-    assert TENANT_ID in call_args
-    assert OTHER_TENANT not in call_args
+    args, kwargs = conn.execute.call_args
+    assert args[1] == TENANT_ID  # tenant_id is the 2nd positional arg (after SQL string)
+    assert args[1] != OTHER_TENANT
 
 
 @pytest.mark.asyncio
