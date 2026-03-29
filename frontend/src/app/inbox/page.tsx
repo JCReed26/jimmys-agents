@@ -76,7 +76,6 @@ export default function InboxPage() {
 
   const tabs: { id: TabId; label: string; count: number }[] = [
     { id: "all",       label: "All",       count: pendingAll },
-    { id: "agents",    label: "Agents",    count: pendingAgents },
   ];
 
   return (

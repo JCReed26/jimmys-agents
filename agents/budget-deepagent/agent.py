@@ -71,27 +71,13 @@ class BudgetSyncMiddleware(AgentMiddleware):
 
 @tool
 def fetch_latest_bank_transactions(days_back: int = 3) -> str:
-    """Fetch the latest transactions via fintable or plaid. returns csv formatted string.
-    Returns fake data for testing purposes."""
-    # Generate dates relative to today for realistic testing
-    today = datetime.now()
-    dates = [(today - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days_back)]
-
-    mock_data = [
-        ["date", "description", "amount", "account", "pending"],
-        [dates[0], "UBER *TRIP", "-15.40", "SoFi Checking", "False"],
-        [dates[0], "WHOLE FOODS MARKET", "-84.21", "SoFi Credit", "False"],
-        [dates[1], "PAYROLL *INC", "3200.00", "SoFi Checking", "False"],
-        [dates[1], "STARBUCKS STORE 123", "-4.50", "SoFi Credit", "False"],
-        [dates[2], "AMZN Mktp US", "-32.99", "SoFi Credit", "False"],
-        # The transaction below is intentionally ambiguous to test your HITL tool
-        [dates[2], "UNKNOWN VENDOR #992", "-150.00", "SoFi Credit", "True"], 
-    ]
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerows(mock_data)
-    return output.getvalue()
+    """Fetch the latest transactions via fintable or plaid. returns csv formatted string."""
+    # Fake data for testing the daily-checkin skill
+    return """date,description,amount,type
+2026-03-27,UBER EATS,-35.50,debit
+2026-03-28,STARBUCKS,-6.45,debit
+2026-03-28,SOFI INTEREST,12.00,credit
+2026-03-28,AMAZON.COM,-145.99,debit"""
 
 @tool
 def ask_human_for_categorization(merchant: str, amount: float, possible_categories: list[str]) -> str:
