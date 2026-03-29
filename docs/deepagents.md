@@ -346,6 +346,36 @@ curl http://localhost:8080/hotl | python -m json.tool
 
 ---
 
+## HOTL Reporting
+
+Agents must call `POST /hotl` from `aafter_agent` to populate the dashboard logs page. The endpoint accepts an `X-Internal-Key` header to bypass JWT auth — this is the only safe way for agents to write HOTL data without a user session.
+
+```python
+import httpx
+import os
+
+class MyMiddleware(AgentMiddleware):
+
+    async def aafter_agent(self, state, runtime):
+        await httpx.AsyncClient().post(
+            "http://localhost:8080/hotl",
+            headers={"X-Internal-Key": os.environ.get("INTERNAL_API_KEY", "")},
+            json={
+                "agent_name": "my-agent",
+                "overview": "...",           # 1-2 sentence summary of what was done
+                "tools": [...],              # list of tool names used
+                "thoughts": "...",           # key reasoning steps
+                "cost_usd": 0.0012,          # from LangSmith or token count * rate
+                "total_tokens": 1500,        # prompt + completion tokens
+                "langsmith_run_id": "...",   # from runtime.config if available
+            },
+        )
+```
+
+The gateway resolves the tenant from the `agent_name` by querying `tenant_agents`. If the agent is not registered, it falls back to James's tenant ID. The `cost_usd`, `total_tokens`, and `langsmith_run_id` fields are stored in `hotl_logs` and surfaced in the dashboard logs view.
+
+---
+
 ## Three-Layer Ownership Model
 
 Data and configuration in jimmys-agents is owned at three distinct layers. Each layer has its own storage, access pattern, and mutation rules.

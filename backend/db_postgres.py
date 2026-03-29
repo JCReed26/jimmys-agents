@@ -94,14 +94,23 @@ async def list_hotl_logs(conn, tenant_id: str, agent: Optional[str] = None, unre
     return [dict(r) for r in rows]
 
 
-async def create_hotl_log(conn, tenant_id: str, agent: str, run_id: str, summary: dict) -> dict:
+async def create_hotl_log(
+    conn,
+    tenant_id: str,
+    agent: str,
+    run_id: str,
+    summary: dict,
+    cost_usd: Optional[float] = None,
+    total_tokens: Optional[int] = None,
+    langsmith_run_id: Optional[str] = None,
+) -> dict:
     row = await conn.fetchrow(
         """
-        INSERT INTO hotl_logs (tenant_id, agent, run_id, summary, created_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO hotl_logs (tenant_id, agent, run_id, summary, cost_usd, total_tokens, langsmith_run_id, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
-        tenant_id, agent, run_id, json.dumps(summary), _now(),
+        tenant_id, agent, run_id, json.dumps(summary), cost_usd, total_tokens, langsmith_run_id, _now(),
     )
     return dict(row)
 
@@ -126,6 +135,23 @@ async def clear_hotl_logs(conn, tenant_id: str) -> None:
 
 
 # ── Run records ───────────────────────────────────────────────────────────────
+
+async def list_runs_for_agent(conn, tenant_id: str, agent_name: str, limit: int = 20) -> list:
+    """Return run records for a specific agent, scoped to tenant, ordered by started_at DESC."""
+    limit = min(limit, 100)
+    rows = await conn.fetch(
+        """
+        SELECT id, status, cost_usd, token_count AS total_tokens, started_at, finished_at AS ended_at,
+               run_id AS langsmith_run_id
+        FROM run_records
+        WHERE tenant_id=$1 AND agent=$2
+        ORDER BY started_at DESC
+        LIMIT $3
+        """,
+        tenant_id, agent_name, limit,
+    )
+    return [dict(r) for r in rows]
+
 
 async def list_runs(conn, tenant_id: str, agent: Optional[str] = None, limit: int = 50) -> list:
     query = "SELECT * FROM run_records WHERE tenant_id=$1"

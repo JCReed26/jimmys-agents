@@ -16,3 +16,4 @@ Fintable/Plaid + Curr + Input -> analysis and correction -> report
 1. daily-reconciliation - runs at the end of the day for daily checkups across accounts
 2. receipt-processing - when the user uploads an image of a receipt
 3. budget-architect - when the user asks to reorganize the budget
+4. weekly-analysis - runs weekly to analyze spending habits and track spending goals

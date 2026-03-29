@@ -99,6 +99,14 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     { href: "/schedules", label: "Schedules",      icon: CalendarClock },
   ];
 
+  if (pathname.startsWith("/login")) {
+    return (
+      <main className="flex-1 min-h-screen w-full items-center justify-center bg-background p-4">
+        {children}
+      </main>
+    );
+  }
+
   return (
     <SidebarProvider>
       <Sidebar variant="inset" collapsible="icon">
@@ -107,7 +115,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-[var(--agent-calendar)]" />
             <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
-              Jimmy&apos;s Agents
+              {tenantName || "Loading..."}
             </span>
           </Link>
         </SidebarHeader>

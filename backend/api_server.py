@@ -606,10 +606,24 @@ async def resolve_hitl(item_id: str, req: HitlResolveRequest, request: Request):
 # HOTL
 # ─────────────────────────────────────────
 
+JAMES_TENANT_ID = "4efdeb00-1b23-4031-bc77-555af005a406"
+
+
 class HotlCreateRequest(BaseModel):
-    agent: str
-    run_id: str
-    summary: dict[str, Any]
+    # agent_name is the canonical field agents send; agent is accepted as an alias
+    agent_name: str | None = None
+    agent: str | None = None
+    run_id: str = ""
+    # Flat fields agents send from aafter_agent
+    overview: str | None = None
+    tools: list[Any] | None = None
+    thoughts: str | None = None
+    # Optional cost/token/trace metadata
+    cost_usd: float | None = None
+    total_tokens: int | None = None
+    langsmith_run_id: str | None = None
+    # Legacy field — kept for gateway-internal calls (translator.hotl_summary)
+    summary: dict[str, Any] | None = None
 
 
 @app.get("/hotl")
@@ -620,8 +634,46 @@ async def list_hotl(request: Request, agent: str | None = None, unread_only: boo
 
 @app.post("/hotl")
 async def create_hotl(req: HotlCreateRequest, request: Request):
+    # Resolve agent name — accept both agent_name (from agent code) and agent (from gateway)
+    agent_name = req.agent_name or req.agent or "unknown"
+
+    # When called via internal key, look up the real tenant_id from tenant_agents table
+    tenant_id = request.state.tenant_id
+    if tenant_id == "internal":
+        async with request.app.state.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT ta.tenant_id::text
+                FROM tenant_agents ta
+                JOIN agent_registry ar ON ta.agent_registry_id = ar.id
+                WHERE ar.name = $1
+                LIMIT 1
+                """,
+                agent_name,
+            )
+        tenant_id = row["tenant_id"] if row else JAMES_TENANT_ID
+
+    # Build summary: prefer explicit summary dict, otherwise build from flat fields
+    if req.summary is not None:
+        summary = req.summary
+    else:
+        summary = {
+            "overview": req.overview or "",
+            "tools": req.tools or [],
+            "thoughts": req.thoughts or "",
+        }
+
     async with request.app.state.pool.acquire() as conn:
-        log = await db.create_hotl_log(conn, request.state.tenant_id, req.agent, req.run_id, req.summary)
+        log = await db.create_hotl_log(
+            conn,
+            tenant_id,
+            agent_name,
+            req.run_id or str(uuid.uuid4()),
+            summary,
+            cost_usd=req.cost_usd,
+            total_tokens=req.total_tokens,
+            langsmith_run_id=req.langsmith_run_id,
+        )
     return {"id": str(log["id"])}
 
 
@@ -652,9 +704,17 @@ async def mark_hotl_read(log_id: str, request: Request):
 # ─────────────────────────────────────────
 
 @app.get("/runs")
-async def list_runs(request: Request, agent: str | None = None, limit: int = 50):
+async def list_runs(request: Request, agent: str | None = None, limit: int = 20):
+    """
+    List run records for the requesting tenant.
+    If `agent` is provided, returns scoped results via list_runs_for_agent.
+    limit: default 20, max 100.
+    """
+    limit = min(limit, 100)
     async with request.app.state.pool.acquire() as conn:
-        return await db.list_runs(conn, request.state.tenant_id, agent=agent, limit=limit)
+        if agent:
+            return await db.list_runs_for_agent(conn, request.state.tenant_id, agent, limit=limit)
+        return await db.list_runs(conn, request.state.tenant_id, limit=limit)
 
 
 @app.post("/runs/start")
