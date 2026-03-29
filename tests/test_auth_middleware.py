@@ -8,17 +8,20 @@ from fastapi.testclient import TestClient
 TEST_JWT_SECRET = "test-secret-32-chars-exactly-ok!"
 TEST_TENANT_ID = "11111111-1111-1111-1111-111111111111"
 TEST_USER_ID   = "22222222-2222-2222-2222-222222222222"
+TEST_SUPABASE_URL = "https://test.supabase.co"
+TEST_ISSUER = f"{TEST_SUPABASE_URL}/auth/v1"
 
 def make_token(user_id=TEST_USER_ID, secret=TEST_JWT_SECRET, expired=False):
     exp = time.time() + (-10 if expired else 3600)
     return jwt.encode(
-        {"sub": user_id, "aud": "authenticated", "exp": int(exp)},
+        {"sub": user_id, "aud": "authenticated", "exp": int(exp), "iss": TEST_ISSUER},
         secret,
         algorithm="HS256",
     )
 
 def make_app(monkeypatch, tenant_row={"tenant_id": TEST_TENANT_ID}):
     monkeypatch.setenv("SUPABASE_JWT_SECRET", TEST_JWT_SECRET)
+    monkeypatch.setenv("SUPABASE_URL", TEST_SUPABASE_URL)
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow = AsyncMock(return_value=tenant_row)

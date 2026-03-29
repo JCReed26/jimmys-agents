@@ -96,9 +96,15 @@ class AgentRegistry:
 
     def record_failure(self, name: str) -> None:
         state = self._circuits.setdefault(name, _CircuitState())
+        already_open = state.failures >= FAILURE_THRESHOLD
         state.failures += 1
-        if state.failures >= FAILURE_THRESHOLD and state.opened_at is None:
-            state.opened_at = time.monotonic()
+        if state.failures >= FAILURE_THRESHOLD:
+            if state.opened_at is None:
+                # First time crossing threshold — open the circuit
+                state.opened_at = time.monotonic()
+            elif already_open:
+                # Probe failed while in HALF_OPEN — reset recovery timer
+                state.opened_at = time.monotonic()
 
     def record_success(self, name: str) -> None:
         state = self._circuits.get(name)

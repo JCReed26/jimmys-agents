@@ -61,13 +61,13 @@ async def auth_middleware(request: Request, call_next):
 
     try:
         issuer = _get_issuer()
-        options = {"verify_iss": bool(issuer)}
+        options = {"verify_iss": True}
         payload = jwt.decode(
             token,
             _get_jwt_secret(),
             algorithms=["HS256"],
             audience="authenticated",
-            issuer=issuer or None,
+            issuer=issuer,
             options=options,
         )
     except JWTError:

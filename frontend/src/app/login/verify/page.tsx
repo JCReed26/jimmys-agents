@@ -15,14 +15,19 @@ import {
 } from "@/components/ui/card";
 import { GeistMono } from "geist/font/mono";
 
+const MAX_ATTEMPTS = 5;
+
 export default function VerifyPage() {
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [attempts, setAttempts] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get("email") ?? "";
+
+  const tooManyAttempts = attempts >= MAX_ATTEMPTS;
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -34,6 +39,7 @@ export default function VerifyPage() {
       router.push("/login");
       return;
     }
+    if (tooManyAttempts) return;
     setError(null);
     setLoading(true);
 
@@ -45,7 +51,13 @@ export default function VerifyPage() {
     });
 
     if (error) {
-      setError(error.message);
+      const next = attempts + 1;
+      setAttempts(next);
+      setError(
+        next >= MAX_ATTEMPTS
+          ? "Too many attempts — go back and request a new code"
+          : error.message
+      );
       setLoading(false);
       return;
     }
@@ -78,13 +90,14 @@ export default function VerifyPage() {
               onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
               className={`text-center text-2xl tracking-[0.5em] ${GeistMono.className}`}
               required
+              disabled={tooManyAttempts}
             />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <Button
             type="submit"
             className="w-full"
-            disabled={loading || code.length !== 6}
+            disabled={loading || code.length !== 6 || tooManyAttempts}
           >
             {loading ? "Verifying…" : "Verify"}
           </Button>
@@ -94,7 +107,7 @@ export default function VerifyPage() {
             className="w-full"
             onClick={() => router.push("/login")}
           >
-            Back
+            ← Back
           </Button>
         </form>
       </CardContent>

@@ -187,7 +187,11 @@ async def lifespan(app: FastAPI):
     global _pool
     validate_env()
     _pool = await asyncpg.create_pool(
-        os.environ["DATABASE_URL"], min_size=2, max_size=10, init=_init_conn
+        os.environ["DATABASE_URL"],
+        min_size=2,
+        max_size=10,
+        init=_init_conn,
+        max_inactive_connection_lifetime=300,
     )
     app.state.pool = _pool
     await _reload_schedules()
@@ -205,9 +209,15 @@ app = FastAPI(title="jimmys-agents API Gateway", lifespan=lifespan)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+_cors_origins = [
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:8080"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
