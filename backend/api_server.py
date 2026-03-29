@@ -231,6 +231,17 @@ async def _auth(request: Request, call_next):
         return await call_next(request)
     return await auth_middleware(request, call_next)
 
+@app.get("/ok")
+async def health_check(request: Request):
+    """Health check endpoint, verifies DB connection."""
+    try:
+        if request.app.state.pool:
+            async with request.app.state.pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            return {"status": "ok", "db": "ok"}
+        return {"status": "degraded", "db": "not_initialized"}
+    except Exception as e:
+        return {"status": "degraded", "db": "error", "message": str(e)}
 
 # ─────────────────────────────────────────
 # Health
