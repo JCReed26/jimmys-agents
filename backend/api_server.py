@@ -292,6 +292,7 @@ async def agents_status(request: Request):
         tenant_agents = await db.list_tenant_agents(conn, tenant_id)
         schedules = await db.list_schedules(conn, tenant_id)
         hitl_pending = await db.list_hitl_items(conn, tenant_id, status="pending")
+        runs = await conn.fetch("SELECT id, agent, status, started_at, cost_usd, token_count, error_msg FROM run_records WHERE tenant_id=$1 ORDER BY started_at DESC LIMIT 100", tenant_id)
 
     results: dict[str, dict] = {}
 
@@ -326,6 +327,21 @@ async def agents_status(request: Request):
         name = item["agent"]
         if name in results:
             results[name]["hitlCount"] = results[name].get("hitlCount", 0) + 1
+
+    # Add run statistics
+    for run in runs:
+        name = run["agent"]
+        if name in results:
+            results[name]["totalRuns"] = results[name].get("totalRuns", 0) + 1
+            if run["status"] == "error":
+                results[name]["errorRuns"] = results[name].get("errorRuns", 0) + 1
+                
+            # Keep the most recent run as lastRun
+            if "lastRun" not in results[name] or str(run["started_at"]) > results[name]["lastRun"]:
+                results[name]["lastRun"] = str(run["started_at"])
+                results[name]["lastRunStatus"] = run["status"]
+                if run["status"] == "error":
+                    results[name]["lastError"] = run["error_msg"]
 
     return results
 

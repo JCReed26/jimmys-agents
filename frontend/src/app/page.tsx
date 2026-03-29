@@ -20,7 +20,10 @@ interface AgentStatus {
   hitlCount: number;
   nextRun?: string;
   lastRun?: string;
+  lastRunStatus?: string;
+  lastError?: string;
   totalRuns: number;
+  errorRuns?: number;
   tokenCount?: string;
   costToday?: number;
 }
@@ -254,9 +257,19 @@ function AgentCard({
               </div>
 
               {status?.lastRun && (
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono">
-                  <Clock className="h-2.5 w-2.5" />
-                  <span>last run {relTime(status.lastRun)}</span>
+                <div className="flex flex-col gap-1 mt-1">
+                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono">
+                    <Clock className="h-2.5 w-2.5" />
+                    <span>last run {relTime(status.lastRun)}</span>
+                    {status.lastRunStatus === "error" && (
+                       <AlertCircle className="h-2.5 w-2.5 text-destructive ml-1" />
+                    )}
+                  </div>
+                  {status.lastRunStatus === "error" && status.lastError && (
+                    <p className="text-[10px] text-destructive truncate max-w-full">
+                      Error: {status.lastError}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
