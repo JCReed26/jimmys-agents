@@ -52,3 +52,4 @@ a proactive financial advisor, helps create budgets, track spending, analyze dat
 - Lead Generation
 
 - upgrades to frontend components and pages
+- telegram bridge for remote agent communication (day=context window)
