@@ -10,15 +10,18 @@ A personal AI agent management platform. One place to register, schedule, monito
 ┌─────────────────────────────────────────────────────────────────┐
 │                      Dashboard  :3000                           │
 │  Chat │ Inbox │ Logs │ Schedules │ Stats │ Observe │ Settings   │
+│  Admin (superadmin only) │ Agent Memory editor                  │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ all traffic (AG-UI protocol)
+                           │ JWT Bearer — Supabase Auth
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                     Gateway  :8080                              │
 │  agents.yaml registry  │  circuit breaker  │  rate limiting     │
 │  run lifecycle (open → translate → close)                       │
-│  APScheduler  │  HITL DB  │  HOTL DB  │  SQLite state.db       │
+│  APScheduler  │  HITL DB  │  HOTL DB  │  asyncpg Postgres      │
 │  LangGraph SSE ──► AG-UI translation ──► browser               │
+│  Multi-tenant (tenant_id on every row)                          │
 └─────┬──────────┬──────────┬──────────┬──────────┬──────────────┘
       │          │          │          │          │
    :8001      :8002      :8003      :8004      :8005
@@ -35,6 +38,24 @@ A personal AI agent management platform. One place to register, schedule, monito
 
 ---
 
+## Auth & Multi-Tenancy
+
+Auth is **Supabase OTP passwordless** (email magic link). All gateway endpoints require a JWT Bearer token issued by Supabase.
+
+```
+Browser → POST /api/auth (Next.js route) → Supabase OTP
+Browser stores session → subsequent requests: Authorization: Bearer {jwt}
+Next.js server routes call getServerAccessToken() → forward Bearer to gateway
+Gateway auth_middleware.py verifies JWT → sets request.state.tenant_id
+Every DB query is scoped by tenant_id
+```
+
+**Internal API key bypass**: Agents that need to call `/hotl` without a JWT pass `X-Internal-Key: {INTERNAL_API_KEY}`. The middleware grants `tenant_id = "internal"` and the endpoint resolves the real tenant from `tenant_agents`.
+
+**Admin access**: The `/admin/*` endpoints require `tenant_id == JAMES_TENANT_ID` (hardcoded in `api_server.py`). The Admin dashboard page is accessible only to the superadmin tenant.
+
+---
+
 ## Run Lifecycle
 
 ### Chat Run
@@ -46,11 +67,11 @@ A personal AI agent management platform. One place to register, schedule, monito
 4. Gateway calls POST {agent_url}/runs/stream (LangGraph)
    with stream_mode=["messages"] and thread_id from localStorage
 5. LangGraph streams native SSE events
-6. Gateway translates → AG-UI events → streams to browser
+6. Gateway StreamTranslator translates → AG-UI events → streams to browser
 7. Browser receives TEXT_MESSAGE_CONTENT chunks, TOOL_CALL_* events
-8. Stream ends → gateway extracts usage_metadata
+8. Stream ends → translator extracts usage_metadata (cost, tokens)
 9. Gateway closes run_record (status: done, tokens, cost)
-10. Gateway writes HOTL entry (tools used, overview, duration)
+10. Gateway writes HOTL entry (tools used, overview, duration, cost)
 ```
 
 ### Scheduled Run
@@ -100,12 +121,13 @@ Post-run review logs. James can see what each agent did after the fact.
 
 ```
 Any run completes (chat or scheduled)
-  → Gateway extracts from the AG-UI stream it translated:
+  → Gateway StreamTranslator extracts from the AG-UI stream:
       - Tool calls (name, args, result)
       - usage_metadata (input_tokens, output_tokens)
       - Duration (started_at → finished_at)
-  → Writes HOTL entry: {agent, run_id, summary: {tools, overview, thoughts}}
-  → Logs page shows entry with unread badge
+      - LangSmith run ID (if LANGSMITH_TRACING=true)
+  → Writes HOTL entry: {agent, run_id, cost_usd, total_tokens, summary}
+  → Logs page shows entry with unread badge + LangSmith trace link
   → Global search indexes HOTL content
 ```
 
@@ -115,7 +137,7 @@ HOTL is **gateway-owned**. Agents do not call `/hotl`. The gateway builds the su
 
 ## Agent Registry
 
-`agents.yaml` at project root is the single source of truth.
+`agents.yaml` at project root is the single source of truth for running processes.
 
 ```yaml
 agents:
@@ -126,14 +148,14 @@ agents:
     rate_limit: "10/minute"
 ```
 
-### Adding an agent
+### Adding an agent (4 steps)
 
-1. Create `agents/{name}/` with `agent.py` + `langgraph.json` + `skills/`
-2. Start the process: `langgraph dev --port {port}` (or via Makefile)
-3. Add entry to `agents.yaml`
-4. `POST /registry/reload`
+1. Copy `agents/_template/` → `agents/{name}/`, edit `agent.py`
+2. Add entry to `agents.yaml` (copy existing format)
+3. Add entry to `frontend/src/lib/agents.ts` (copy existing pattern)
+4. Add `run-{name}` target to `Makefile` (copy existing target)
 
-The agent immediately appears in the dashboard with live status. No code changes, no restart.
+Then `POST /registry/reload` to hot-load without restart.
 
 ### Removing an agent
 
@@ -142,15 +164,6 @@ The agent immediately appears in the dashboard with live status. No code changes
 3. `POST /registry/reload`
 
 Run history, HITL items, and HOTL logs for that agent remain in the DB.
-
-### Enabling/disabling
-
-```yaml
-  budget-agent:
-    enabled: false
-```
-
-`POST /registry/reload` → APScheduler jobs paused, `/run` returns 404, agent appears as DISABLED in dashboard.
 
 ---
 
@@ -164,7 +177,7 @@ budget-agent
   └── daily-sync      (0 7 * * *)   "Sync latest receipts from Gmail"
 ```
 
-Schedules are stored in `data/state.db`. APScheduler reads from the DB on startup and on every `POST /registry/reload` or schedule upsert. Disabling a schedule removes the APScheduler job immediately.
+Schedules are stored in Postgres (`schedules` table). APScheduler reads from the DB on startup and on every `POST /registry/reload` or schedule upsert. Disabling a schedule removes the APScheduler job immediately.
 
 Thread IDs for scheduled runs are stored per schedule so run history is reviewable and continuous across executions.
 
@@ -186,14 +199,40 @@ Thread IDs for scheduled runs are stored per schedule so run history is reviewab
 
 ## Data
 
-All state lives in `data/state.db` (SQLite, WAL mode). Tables:
+All state lives in **Supabase Postgres** via `asyncpg` connection pool. All SQL is in `backend/sql/` as named query files, loaded by `backend/sql_loader.py`.
 
 | Table | Contents |
 |---|---|
+| `tenants` | Tenant records (id, name, is_active) |
+| `user_tenants` | Maps Supabase auth user IDs → tenants |
+| `agent_registry` | Agent definitions (name, port, display_name, accent_color) |
+| `tenant_agents` | Which agents are assigned to which tenant |
+| `tenant_agent_configs` | Per-tenant agent config overrides (JSONB) |
 | `run_records` | Every run — agent, run_id, status, tokens, cost, started_at, finished_at |
 | `hitl_items` | Pending/resolved approval requests |
-| `hotl_logs` | Post-run summaries (tools, thoughts, overview) |
-| `schedules_v2` | Cron configs per agent+workflow, thread_id |
+| `hotl_logs` | Post-run summaries (tools, thoughts, overview, cost_usd, total_tokens) |
+| `schedules` | Cron configs per (tenant_id, agent, workflow), thread_id |
+
+SQL files in `backend/sql/`:
+- `nav.sql` — badge counts
+- `hitl.sql` — HITL inbox queries
+- `hotl.sql` — HOTL log queries
+- `runs.sql` — run record lifecycle
+- `schedules.sql` — schedule CRUD + APScheduler load
+- `agents.sql` — agent status, memory/rules search
+- `admin.sql` — tenant/user/agent admin operations
+
+---
+
+## Agent Memory (AGENTS.md)
+
+Each deepagent has a persistent memory file at `{agent.dir}/skills/AGENTS.md`. This is:
+- Written by the agent during runs (its notebook / preferences)
+- Readable and editable from the dashboard Memory tab
+- Read via `GET /agents/{name}/agents-md` → reads the actual file from disk
+- Written via `PUT /agents/{name}/agents-md` → writes back to disk
+
+The agent reads this file at startup as part of its `memory=["skills/AGENTS.md"]` config.
 
 ---
 
@@ -205,8 +244,6 @@ Budget-agent is the reference implementation. Deepagents are LangGraph agents wi
 - **Memory**: `skills/AGENTS.md` — the agent's persistent notebook, written across runs
 - **FilesystemBackend**: gives the agent real file tools (`read_file`, `write_file`, `edit_file`) scoped to its own directory
 - **Middleware**: `abefore_agent` / `aafter_agent` hooks for pre/post-run domain logic
-
-The gateway reads `skills/AGENTS.md` for the Memory tab in the dashboard. The agent writes it freely.
 
 File operations (write_file, read_file, etc.) are LangGraph tool calls. The gateway's AG-UI translation surfaces them as `TOOL_CALL_*` events — every file the agent touches is visible in the run stream and HOTL.
 
@@ -226,13 +263,10 @@ For native AG-UI agents (those that emit AG-UI directly), the gateway can pass t
 
 ---
 
-## Security (deferred)
+## Security
 
-Current state: local-only, no auth, CORS locked to `localhost:3000`. Acceptable for solo dev.
+Auth is enforced at the gateway via JWT verification (`auth_middleware.py`). Every endpoint is tenant-scoped. Internal agents bypass JWT with `X-Internal-Key` header. Admin endpoints gate on `JAMES_TENANT_ID`.
 
-When adding remote access (post-Neon migration):
-- API key header auth (`X-API-Key`) on all non-health endpoints
-- Neon Auth OTP passwordless for dashboard login
-- Neon Postgres replacing SQLite for durability
+CORS is locked to `CORS_ORIGINS` env var (comma-separated). Default: `http://localhost:3000`.
 
-See `docs/issues.md` I-03 for the full security task list.
+See `docs/dev-notes/auth-flow.md` for the full auth decision tree.

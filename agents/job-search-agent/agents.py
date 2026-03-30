@@ -1,14 +1,22 @@
 from deepagents import create_deep_agent
+from langchain.tools import tool
 from deepagents.backends import FilesystemBackend
 from pathlib import Path
-from langchain_google_genai import ChatGoogleGenerativeAI
 import os
+from backend.models import free_nvidia_model
 from langchain_core.messages import HumanMessage
 from datetime import datetime
 from typing import TypedDict, Optional
 from sub_agents import job_tracker_agent, classification_agent, optimization_agent
 
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+from deepagents.middleware import (
+    SubAgentMiddleware,
+    SkillsMiddleware,
+    MemoryMiddleware,
+    FilesystemMiddleware
+)
+
+llm = free_nvidia_model
 
 class JobInProcess(TypedDict):
     id: str
@@ -25,20 +33,14 @@ class JobInProcess(TypedDict):
     applied_date: Optional[datetime]
     applied_status: Optional[str]
 
+@tool
 def get_first_approval():
     """HITL Approval for the job that passed classification before spending optimization tokens"""
     pass
 
+@tool
 def get_second_approval():
     """HITL Approval for the job that was optimized to confirm if it was applied to"""
-    pass
-
-def save_job_to_tracker():
-    """Saves the job to the job tracker database"""
-    pass
-
-def move_job_to_rejected():
-    """Moves the job to the rejected jobs database"""
     pass
 
 SYSTEM_PROMPT = """
@@ -46,10 +48,10 @@ You are a job search agent that helps the user find jobs and apply to them.
 You follow a process to find jobs that are a good fit for the user.
 You will use the tools provided to you and chains of thought to find jobs.
 
-You have 4 csv files that you manage with your filesystem backend
+You have 5 csv files that you manage with your filesystem backend
 - found_jobs.csv - jobs that have been found and are waiting to be classified
-- classified_jobs.csv - jobs that have been classified and are waiting to be approved
-- optimized_jobs.csv - jobs that have been optimized and are waiting to be applied to
+- classified_jobs.csv - jobs that have been classified and are waiting to be approved through first approval
+- optimized_jobs.csv - jobs that have been optimized and are waiting to be applied to through second approval
 - applied_jobs.csv - jobs that have been applied to and are waiting to be tracked
 - rejected_jobs.csv - jobs that have been rejected and are waiting to be moved to the rejected jobs database
 
@@ -60,24 +62,36 @@ The process:
 4. If approved, call the optimization subagent to take the resume and cover letter templates and optimize them for the job
 5. After optimization, verify the files were truly optimized to the job description and then call get_second_approval HITL
 6. If approved, the job was applied to and should be added to the job tracker database. call save_job_to_tracker tool
+
+You will have another markdown file that you will manage (must chat with user first to initialize this file)
+The file is called candidate_profile.md this is where you will store the users goal for what they do in their position
+job titles can be all over the place and thus giving you what the actual tasks the candidate can cover you can discover better jobs
+
+you have skills to help with different tasks and skills to assign to sub agents when spawning them.
 """
 
 tools = [
     get_first_approval,
     get_second_approval,
-    save_job_to_tracker,
-    move_job_to_rejected,
 ]
+skills = ["skills/"]
+memory = ["skills/AGENTS.md"]
+backend = FilesystemBackend(root_dir=Path(__file__).parent.absolute())
+subagents = [job_tracker_agent, classification_agent, optimization_agent]
 
 agent = create_deep_agent(
     name="Job Search Agent",
     model=llm,
     tools=tools,
+    interrupt_on={
+        "get_first_approval": {"allowed_values": ["approve", "reject"]},
+        "get_second_approval": True,            # approve, edit, reject
+    },
     system_prompt=SYSTEM_PROMPT,
-    skills=["skills/"],
-    memory=["skills/AGENTS.md"],
+    skills=skills,
+    memory=memory,
     backend=FilesystemBackend(root_dir=Path(__file__).parent.absolute()),
-    subagents=[job_tracker_agent, classification_agent, optimization_agent]
+    subagents=subagents,
 )
 
 

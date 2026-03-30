@@ -6,9 +6,9 @@ from jose import jwt, JWTError
 
 SKIP_PATHS = {"/ok", "/docs", "/openapi.json", "/redoc"}
 
-# Internal key bypass: agents posting HOTL logs don't carry a JWT.
-# Only applies to POST /hotl. Disabled entirely if INTERNAL_API_KEY is unset.
-_INTERNAL_BYPASS_PATH = "/hotl"
+# Internal key bypass: agents posting HOTL logs or HITL requests don't carry a JWT.
+# Applies to POST /hotl and POST /hitl. Disabled entirely if INTERNAL_API_KEY is unset.
+_INTERNAL_BYPASS_PATHS = {"/hotl", "/hitl"}
 _INTERNAL_BYPASS_METHOD = "POST"
 
 
@@ -38,12 +38,12 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path in SKIP_PATHS:
         return await call_next(request)
 
-    # Internal agent bypass: POST /hotl only, and only when INTERNAL_API_KEY is configured.
+    # Internal agent bypass: POST /hotl and POST /hitl, only when INTERNAL_API_KEY is configured.
     internal_key = _get_internal_api_key()
     if (
         internal_key
         and request.method == _INTERNAL_BYPASS_METHOD
-        and request.url.path == _INTERNAL_BYPASS_PATH
+        and request.url.path in _INTERNAL_BYPASS_PATHS
     ):
         provided = request.headers.get("X-Internal-Key", "")
         if provided == internal_key:

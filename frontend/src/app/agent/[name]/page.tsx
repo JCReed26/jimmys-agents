@@ -12,7 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Send, Loader2, ChevronRight, ChevronLeft, Cpu,
   CalendarClock, BookOpen, Inbox, Play, Check,
-  Bot, User, RotateCw, Clock, CheckCircle2,
+  Bot, User, RotateCw, Clock, CheckCircle2, DollarSign, Activity
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
@@ -64,7 +64,11 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Panel data
-  const [memory, setMemory] = useState<{ memory: string; rules: string } | null>(null);
+  const [agentsMd, setAgentsMd] = useState<string>("");
+  const [agentsMdEditing, setAgentsMdEditing] = useState(false);
+  const [agentsMdDraft, setAgentsMdDraft] = useState("");
+  const [agentsMdSaving, setAgentsMdSaving] = useState(false);
+  const [agentsMdSaved, setAgentsMdSaved] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [panelLoading, setPanelLoading] = useState(false);
 
@@ -76,8 +80,12 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
     setPanelLoading(true);
     try {
       if (panel === "memory") {
-        const r = await fetch(`/api/memory/${name}`, { cache: "no-store" });
-        if (r.ok) setMemory(await r.json());
+        const r = await fetch(`/api/agents-md/${name}`, { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          setAgentsMd(data.content ?? "");
+          setAgentsMdDraft(data.content ?? "");
+        }
       } else if (panel === "history") {
         const r = await fetch(`/api/runs/${name}?limit=10`, { cache: "no-store" });
         if (r.ok) {
@@ -89,6 +97,25 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
       setPanelLoading(false);
     }
   }, [name]);
+
+  async function saveAgentsMd() {
+    setAgentsMdSaving(true);
+    try {
+      const r = await fetch(`/api/agents-md/${name}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: agentsMdDraft }),
+      });
+      if (r.ok) {
+        setAgentsMd(agentsMdDraft);
+        setAgentsMdEditing(false);
+        setAgentsMdSaved(true);
+        setTimeout(() => setAgentsMdSaved(false), 2000);
+      }
+    } finally {
+      setAgentsMdSaving(false);
+    }
+  }
 
   useEffect(() => {
     loadPanel(activePanel);
@@ -303,7 +330,19 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
           {/* Panel content */}
           <div className="flex-1 overflow-y-auto p-4">
             {activePanel === "memory" && (
-              <MemoryPanel memory={memory} loading={panelLoading} accentColor={cfg.accentColor} />
+              <MemoryPanel
+                content={agentsMd}
+                draft={agentsMdDraft}
+                editing={agentsMdEditing}
+                saving={agentsMdSaving}
+                saved={agentsMdSaved}
+                loading={panelLoading}
+                accentColor={cfg.accentColor}
+                onEdit={() => setAgentsMdEditing(true)}
+                onCancel={() => { setAgentsMdEditing(false); setAgentsMdDraft(agentsMd); }}
+                onChange={setAgentsMdDraft}
+                onSave={saveAgentsMd}
+              />
             )}
             {activePanel === "history" && (
               <HistoryPanel history={history} loading={panelLoading} accentColor={cfg.accentColor} />
@@ -389,128 +428,67 @@ function ChatMessage({
 
 // ─── Panel sub-components ────────────────────────────────────────
 
-  schedule: Schedule | null;
-  schedEdit: Partial<Schedule>;
-  setSchedEdit: React.Dispatch<React.SetStateAction<Partial<Schedule>>>;
-  onSave: () => void;
-  onTrigger: () => void;
+function MemoryPanel({
+  content, draft, editing, saving, saved, loading, accentColor,
+  onEdit, onCancel, onChange, onSave,
+}: {
+  content: string;
+  draft: string;
+  editing: boolean;
   saving: boolean;
   saved: boolean;
-  accentColor: string;
-}) {
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Background schedule</p>
-        <Button variant="outline" size="sm" className="h-6 text-[11px] gap-1 px-2" onClick={onTrigger}>
-          <Play className="h-2.5 w-2.5" /> Run now
-        </Button>
-      </div>
-
-      <div className="space-y-3">
-        <div>
-          <label className="text-[11px] text-muted-foreground block mb-1.5">Cron expression</label>
-          <input
-            type="text"
-            value={schedEdit.cron_expr ?? ""}
-            onChange={(e) => setSchedEdit((p) => ({ ...p, cron_expr: e.target.value }))}
-            className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="*/30 * * * *"
-          />
-          <div className="flex flex-wrap gap-1 mt-2">
-            {CRON_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setSchedEdit((prev) => ({ ...prev, cron_expr: p.value }))}
-                className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors font-mono"
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="text-[11px] text-muted-foreground block mb-1.5">Task prompt</label>
-          <Textarea
-            value={schedEdit.task_prompt ?? ""}
-            onChange={(e) => setSchedEdit((p) => ({ ...p, task_prompt: e.target.value }))}
-            placeholder="Instructions for scheduled runs…"
-            rows={4}
-            className="text-sm bg-background border-border resize-none"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setSchedEdit((p) => ({ ...p, enabled: p.enabled ? 0 : 1 }))}
-            className={cn(
-              "text-[11px] px-3 py-1 rounded-full border font-mono transition-colors",
-              schedEdit.enabled
-                ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-                : "border-border text-muted-foreground"
-            )}
-          >
-            {schedEdit.enabled ? "● enabled" : "○ disabled"}
-          </button>
-        </div>
-
-        <Button
-          className="w-full h-8 text-xs gap-1.5"
-          disabled={saving}
-          onClick={onSave}
-          style={saved ? {} : { backgroundColor: accentColor, color: "black" }}
-        >
-          {saved ? <><Check className="h-3 w-3" /> Saved</> : saving ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : "Save schedule"}
-        </Button>
-      </div>
-
-      {schedule?.last_run && (
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 font-mono">
-          <Clock className="h-2.5 w-2.5" />
-          <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MemoryPanel({
-  memory, loading, accentColor,
-}: {
-  memory: { memory: string; rules: string } | null;
   loading: boolean;
   accentColor: string;
+  onEdit: () => void;
+  onCancel: () => void;
+  onChange: (s: string) => void;
+  onSave: () => void;
 }) {
   if (loading) return <Skeleton className="h-40 w-full" />;
-  if (!memory) return (
-    <p className="text-[12px] text-muted-foreground text-center py-8">
-      No memory files found. The agent will create them during runs.
-    </p>
-  );
+
   return (
-    <div className="space-y-4">
-      {memory.memory && (
-        <div>
-          <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-2">MEMORY.md</p>
-          <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap break-all bg-muted/40 rounded-md p-3 leading-relaxed max-h-48 overflow-y-auto">
-            {memory.memory}
-          </pre>
-        </div>
-      )}
-      {memory.rules && (
-        <div>
-          <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-2">RULES.md</p>
-          <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap break-all bg-muted/40 rounded-md p-3 leading-relaxed max-h-48 overflow-y-auto">
-            {memory.rules}
-          </pre>
-        </div>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">AGENTS.md</p>
+        {!editing && (
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={onEdit}>
+            Edit
+          </Button>
+        )}
+      </div>
+
+      {editing ? (
+        <>
+          <Textarea
+            value={draft}
+            onChange={(e) => onChange(e.target.value)}
+            rows={18}
+            className="text-xs font-mono bg-background border-border resize-none"
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="flex-1 h-7 text-xs gap-1"
+              disabled={saving}
+              onClick={onSave}
+              style={saved ? {} : { backgroundColor: accentColor, color: "black" }}
+            >
+              {saved ? <><Check className="h-3 w-3" /> Saved</> : saving ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : "Save"}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onCancel} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+        </>
+      ) : (
+        <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed overflow-y-auto max-h-[calc(100vh-20rem)]">
+          {content || <span className="text-muted-foreground/40 italic">Empty — the agent will populate this during runs.</span>}
+        </pre>
       )}
     </div>
   );
 }
 
-  items: HitlItem[];
 function HistoryPanel({
   history, loading, accentColor,
 }: {

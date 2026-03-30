@@ -7,13 +7,14 @@ import {
   Mail, Calendar, DollarSign, GitBranch,
   LayoutDashboard, Inbox, ScrollText, Activity,
   CalendarClock, Settings, User, ChevronRight,
-  Zap, BarChart3, PanelLeft, LogOut,
+  Zap, BarChart3, PanelLeft, LogOut, Shield,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   SidebarProvider,
   Sidebar,
@@ -50,6 +51,7 @@ const agentLinks = [
 const systemLinks = [
   { href: "/profile",   label: "Profile",  icon: User },
   { href: "/settings",  label: "Settings", icon: Settings },
+  { href: "/admin",     label: "Admin",    icon: Shield },
 ];
 
 // ─── Layout shell ─────────────────────────────────────────────────

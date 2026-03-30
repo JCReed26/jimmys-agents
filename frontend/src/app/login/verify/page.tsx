@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { GeistMono } from "geist/font/mono";
 
 const MAX_ATTEMPTS = 5;
 
-export default function VerifyPage() {
+function VerifyForm() {
   const [code, setCode] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,5 +112,13 @@ export default function VerifyPage() {
         </form>
       </CardContent>
     </Card>
+  );
+}
+
+export default function VerifyPage() {
+  return (
+    <Suspense fallback={<Card className="w-full max-w-sm p-6"><div className="animate-pulse flex space-x-4"><div className="flex-1 space-y-4 py-1"><div className="h-4 bg-muted rounded w-3/4"></div><div className="space-y-2"><div className="h-4 bg-muted rounded"></div><div className="h-4 bg-muted rounded w-5/6"></div></div></div></div></Card>}>
+      <VerifyForm />
+    </Suspense>
   );
 }

@@ -3,6 +3,7 @@ langgraph
 langgraph-cli[inmem]
 langchain-google-genai
 langchain-google-community[gmail,sheets]
+langchain-openrouter
 google-auth-oauthlib
 google-api-python-client
 python-dotenv

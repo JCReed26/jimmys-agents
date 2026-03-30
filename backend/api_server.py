@@ -14,6 +14,8 @@ import asyncio
 import json
 import os
 import uuid
+from dotenv import load_dotenv
+load_dotenv()
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
@@ -57,7 +59,6 @@ _pool: asyncpg.Pool | None = None
 async def trigger_agent_run(
     tenant_id: str,
     agent: str,
-    workflow: str = "default",
     task_prompt: str | None = None,
     thread_id: str | None = None,
 ):
@@ -122,7 +123,10 @@ async def trigger_agent_run(
         cost_usd = _estimate_cost(token_count)
         async with _pool.acquire() as conn:
             await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
-            await db.create_hotl_log(conn, tenant_id, agent, run_id, translator.hotl_summary)
+            await db.create_hotl_log(
+                conn, tenant_id, agent, run_id, translator.hotl_summary,
+                cost_usd=cost_usd, total_tokens=token_count,
+            )
 
     except Exception as e:
         async with _pool.acquire() as conn:
@@ -136,15 +140,15 @@ async def _reload_schedules():
     if _pool is None:
         return
 
+    from backend.sql_loader import load_sql as _load_sql
+    _SCHED_SQL = _load_sql("schedules")
     async with _pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT tenant_id::text, agent, workflow, cron_expr, enabled, task_prompt, thread_id::text FROM schedules"
-        )
+        rows = await conn.fetch(_SCHED_SQL["load_all"])
 
     # M-07: one connection for the whole batch of UPDATE writes
     async with _pool.acquire() as conn:
         for row in rows:
-            job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['workflow']}"
+            job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['name']}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
             if row["enabled"]:
@@ -157,7 +161,6 @@ async def _reload_schedules():
                         kwargs={
                             "tenant_id": row["tenant_id"],
                             "agent": row["agent"],
-                            "workflow": row["workflow"],
                             "task_prompt": row.get("task_prompt"),
                             "thread_id": row.get("thread_id"),
                         },
@@ -168,11 +171,8 @@ async def _reload_schedules():
 
             # Reflect the enabled state back to DB so the toggle is consistent
             await conn.execute(
-                """
-                UPDATE schedules SET enabled=$1
-                WHERE tenant_id=$2 AND agent=$3 AND workflow=$4
-                """,
-                row["enabled"], row["tenant_id"], row["agent"], row["workflow"],
+                _SCHED_SQL["set_enabled"],
+                row["enabled"], row["tenant_id"], row["agent"], row["name"],
             )
 
 
@@ -231,17 +231,6 @@ async def _auth(request: Request, call_next):
         return await call_next(request)
     return await auth_middleware(request, call_next)
 
-@app.get("/ok")
-async def health_check(request: Request):
-    """Health check endpoint, verifies DB connection."""
-    try:
-        if request.app.state.pool:
-            async with request.app.state.pool.acquire() as conn:
-                await conn.execute("SELECT 1")
-            return {"status": "ok", "db": "ok"}
-        return {"status": "degraded", "db": "not_initialized"}
-    except Exception as e:
-        return {"status": "degraded", "db": "error", "message": str(e)}
 
 # ─────────────────────────────────────────
 # Health
@@ -259,13 +248,11 @@ def health():
 @app.get("/me")
 async def get_me(request: Request):
     async with request.app.state.pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT name FROM tenants WHERE id=$1", request.state.tenant_id
-        )
+        tenant_name = await db.get_tenant_name(conn, request.state.tenant_id)
     return {
         "tenant_id": request.state.tenant_id,
         "user_id": request.state.user_id,
-        "tenant_name": row["name"] if row else "Unknown",
+        "tenant_name": tenant_name,
     }
 
 
@@ -303,7 +290,7 @@ async def agents_status(request: Request):
         tenant_agents = await db.list_tenant_agents(conn, tenant_id)
         schedules = await db.list_schedules(conn, tenant_id)
         hitl_pending = await db.list_hitl_items(conn, tenant_id, status="pending")
-        runs = await conn.fetch("SELECT id, agent, status, started_at, cost_usd, token_count, error_msg FROM run_records WHERE tenant_id=$1 ORDER BY started_at DESC LIMIT 100", tenant_id)
+        runs = await db.list_recent_runs(conn, tenant_id)
 
     results: dict[str, dict] = {}
 
@@ -327,7 +314,7 @@ async def agents_status(request: Request):
         name = sched["agent"]
         if name in results:
             results[name].setdefault("schedules", []).append({
-                "workflow": sched["workflow"],
+                "name": sched["name"],
                 "cron": sched["cron_expr"],
                 "enabled": bool(sched["enabled"]),
                 "lastRun": str(sched["last_run"]) if sched.get("last_run") else None,
@@ -426,7 +413,10 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
         cost_usd = _estimate_cost(token_count)
         async with pool.acquire() as conn:
             await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
-            await db.create_hotl_log(conn, tenant_id, agent_name, run_id, translator.hotl_summary)
+            await db.create_hotl_log(
+                conn, tenant_id, agent_name, run_id, translator.hotl_summary,
+                cost_usd=cost_usd, total_tokens=token_count,
+            )
 
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
@@ -668,17 +658,8 @@ async def create_hotl(req: HotlCreateRequest, request: Request):
     tenant_id = request.state.tenant_id
     if tenant_id == "internal":
         async with request.app.state.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT ta.tenant_id::text
-                FROM tenant_agents ta
-                JOIN agent_registry ar ON ta.agent_registry_id = ar.id
-                WHERE ar.name = $1
-                LIMIT 1
-                """,
-                agent_name,
-            )
-        tenant_id = row["tenant_id"] if row else JAMES_TENANT_ID
+            resolved = await db.get_tenant_id_for_agent(conn, agent_name)
+        tenant_id = resolved or JAMES_TENANT_ID
 
     # Build summary: prefer explicit summary dict, otherwise build from flat fields
     if req.summary is not None:
@@ -771,7 +752,7 @@ async def finish_run_endpoint(run_id: str, req: RunFinishRequest, request: Reque
 
 class ScheduleUpsertRequest(BaseModel):
     agent: str
-    workflow: str = "default"  # Use unique names here for multiple schedules
+    name: str = "default"  # Human-friendly label for this schedule (e.g. "Daily Check-in")
     cron_expr: str
     enabled: bool = True
     task_prompt: str = ""
@@ -788,7 +769,7 @@ async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request)
             conn,
             request.state.tenant_id,
             req.agent,
-            req.workflow,
+            req.name,
             req.cron_expr,
             req.enabled,
             req.task_prompt or None,
@@ -796,47 +777,58 @@ async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request)
     await _reload_schedules()
     return {"ok": True}
 
-@app.delete("/schedules/{agent}/{workflow}")
-async def delete_schedule_endpoint(agent: str, workflow: str, request: Request):
+@app.delete("/schedules/{agent}/{name}")
+async def delete_schedule_endpoint(agent: str, name: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        await db.delete_schedule(conn, request.state.tenant_id, agent, workflow)
+        await db.delete_schedule(conn, request.state.tenant_id, agent, name)
     await _reload_schedules()
     return {"ok": True}
 
 
 @app.post("/schedules/{agent}/trigger")
-async def manual_trigger(agent: str, request: Request, workflow: str = "default"):
-    """Manually fire an agent workflow outside its schedule."""
+async def manual_trigger(agent: str, request: Request, name: str = "default"):
+    """Manually fire an agent run outside its schedule."""
     tenant_id = request.state.tenant_id
     async with request.app.state.pool.acquire() as conn:
         rows = await db.list_schedules(conn, tenant_id, agent=agent)
-    sched = next((r for r in rows if r["workflow"] == workflow), None)
+    sched = next((r for r in rows if r["name"] == name), None)
     prompt = sched["task_prompt"] if sched else None
     thread_id = str(sched["thread_id"]) if sched and sched.get("thread_id") else None
-    asyncio.create_task(trigger_agent_run(tenant_id, agent, workflow, prompt, thread_id))
-    return {"ok": True, "message": f"Triggered {agent}/{workflow}"}
+    asyncio.create_task(trigger_agent_run(tenant_id, agent, prompt, thread_id))
+    return {"ok": True, "message": f"Triggered {agent}/{name}"}
 
 
 # ─────────────────────────────────────────
-# Memory / Rules (Postgres — agent_memory / agent_rules tables)
+# AGENTS.md — agent's self-written memory file (filesystem)
 # ─────────────────────────────────────────
 
-@app.get("/agents/{name}/memory")
-async def get_memory(name: str, request: Request):
-    async with request.app.state.pool.acquire() as conn:
-        content = await db.get_agent_memory(conn, request.state.tenant_id, name)
-    if not content:
-        content = "# Memory\n\n_(No content yet — written by the agent during runs.)_\n"
-    return {"content": content}
+_PROJECT_ROOT = Path(__file__).parent.parent
 
 
-@app.get("/agents/{name}/rules")
-async def get_rules(name: str, request: Request):
-    async with request.app.state.pool.acquire() as conn:
-        content = await db.get_agent_rules(conn, request.state.tenant_id, name)
-    if not content:
-        content = "# Rules\n\n_(No content yet — this file is managed by the agent.)_\n"
-    return {"content": content}
+@app.get("/agents/{name}/agents-md")
+async def get_agents_md(name: str, request: Request):
+    agent_cfg = registry.get(name)
+    if not agent_cfg:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
+    if not path.exists():
+        return {"content": ""}
+    return {"content": path.read_text()}
+
+
+@app.put("/agents/{name}/agents-md")
+async def put_agents_md(name: str, request: Request):
+    agent_cfg = registry.get(name)
+    if not agent_cfg:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    body = await request.json()
+    content = body.get("content", "")
+    path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return {"ok": True}
 
 
 # ─────────────────────────────────────────
@@ -863,12 +855,8 @@ async def global_search(q: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
         hotl_logs = await db.list_hotl_logs(conn, request.state.tenant_id, limit=200)
         hitl_items = await db.list_hitl_items(conn, request.state.tenant_id)
-        memory_rows = await conn.fetch(
-            "SELECT agent, content FROM agent_memory WHERE tenant_id=$1", request.state.tenant_id
-        )
-        rules_rows = await conn.fetch(
-            "SELECT agent, content FROM agent_rules WHERE tenant_id=$1", request.state.tenant_id
-        )
+        memory_rows = await db.search_agent_memory(conn, request.state.tenant_id)
+        rules_rows = await db.search_agent_rules(conn, request.state.tenant_id)
 
     for log in hotl_logs:
         s = log["summary"]
@@ -921,6 +909,104 @@ async def global_search(q: str, request: Request):
             })
 
     return {"results": results[:50]}
+
+
+# ─────────────────────────────────────────
+# Admin (superadmin only — James's tenant)
+# ─────────────────────────────────────────
+
+def _require_admin(request: Request):
+    if request.state.tenant_id != JAMES_TENANT_ID:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+
+@app.get("/admin/tenants")
+async def admin_list_tenants(request: Request):
+    _require_admin(request)
+    async with request.app.state.pool.acquire() as conn:
+        tenants = await db.list_tenants(conn)
+    return {"tenants": [serialize(t) for t in tenants]}
+
+
+@app.post("/admin/tenants")
+async def admin_create_tenant(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="name is required")
+    async with request.app.state.pool.acquire() as conn:
+        tenant = await db.create_tenant(conn, name)
+    return serialize(tenant)
+
+
+@app.get("/admin/agents")
+async def admin_list_registry(request: Request):
+    _require_admin(request)
+    async with request.app.state.pool.acquire() as conn:
+        agents = await db.list_agent_registry(conn)
+    return {"agents": [serialize(a) for a in agents]}
+
+
+@app.post("/admin/tenant-agents")
+async def admin_assign_agent(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    tenant_id = body.get("tenant_id", "").strip()
+    agent_name = body.get("agent_name", "").strip()
+    if not tenant_id or not agent_name:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="tenant_id and agent_name required")
+    async with request.app.state.pool.acquire() as conn:
+        row = await db.assign_agent_to_tenant(conn, tenant_id, agent_name)
+    return serialize(row)
+
+
+@app.delete("/admin/tenant-agents")
+async def admin_remove_agent(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    tenant_id = body.get("tenant_id", "").strip()
+    agent_name = body.get("agent_name", "").strip()
+    async with request.app.state.pool.acquire() as conn:
+        await db.remove_agent_from_tenant(conn, tenant_id, agent_name)
+    return {"ok": True}
+
+
+@app.get("/admin/users")
+async def admin_list_users(request: Request):
+    _require_admin(request)
+    tenant_id = request.query_params.get("tenant_id") or JAMES_TENANT_ID
+    async with request.app.state.pool.acquire() as conn:
+        users = await db.list_tenant_users(conn, tenant_id)
+    return {"users": [serialize(u) for u in users]}
+
+
+@app.post("/admin/users")
+async def admin_add_user(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    user_id = body.get("user_id", "").strip()
+    tenant_id = body.get("tenant_id", "").strip()
+    if not user_id or not tenant_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="user_id and tenant_id required")
+    async with request.app.state.pool.acquire() as conn:
+        await db.add_user_to_tenant(conn, user_id, tenant_id)
+    return {"ok": True}
+
+
+@app.delete("/admin/users")
+async def admin_remove_user(request: Request):
+    _require_admin(request)
+    body = await request.json()
+    user_id = body.get("user_id", "").strip()
+    tenant_id = body.get("tenant_id", "").strip()
+    async with request.app.state.pool.acquire() as conn:
+        await db.remove_user_from_tenant(conn, user_id, tenant_id)
+    return {"ok": True}
 
 
 if __name__ == "__main__":

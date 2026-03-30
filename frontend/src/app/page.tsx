@@ -31,7 +31,8 @@ interface AgentStatus {
 interface HotlEntry {
   id: number;
   agent: string;
-  overview: string;
+  overview?: string;
+  summary?: any;
   created_at: string;
   is_read: number;
   status?: string;
@@ -280,83 +281,16 @@ function AgentCard({
   );
 }
 
-  agentKey: string;
-  cfg: typeof WORKFLOWS[string];
-  status?: AgentStatus;
-  loading: boolean;
-}) {
-  const Icon = cfg.icon;
-  const isRunning = status?.status === "RUNNING";
-
-  return (
-    <Link href={`/workflow/${agentKey}`} className="block group">
-      <Card className="bg-card border-border transition-colors hover:border-border/80 h-full">
-        <CardContent className="p-4">
-          {loading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className="h-8 w-8 rounded-md flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: `${cfg.accentColor}18`, border: `1px solid ${cfg.accentColor}30` }}
-                  >
-                    <Icon className="h-4 w-4" style={{ color: cfg.accentColor }} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium leading-tight">{cfg.displayName}</p>
-                    <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">{cfg.description}</p>
-                  </div>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="text-[10px] font-mono shrink-0"
-                  style={{ borderColor: `${cfg.accentColor}40`, color: cfg.accentColor }}
-                >
-                  workflow
-                </Badge>
-              </div>
-
-              {/* Step preview */}
-              <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono overflow-hidden">
-                {["reader", "scraper", "classifier", "optimizer", "writer"].map((s, i, arr) => (
-                  <span key={s} className="flex items-center gap-1">
-                    <span className="px-1.5 py-0.5 rounded bg-muted/60">{s}</span>
-                    {i < arr.length - 1 && <span className="opacity-40">→</span>}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <StatusDot running={isRunning} color={cfg.accentColor} />
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    {isRunning ? "running" : "idle"}
-                  </span>
-                  {status?.totalRuns !== undefined && (
-                    <span className="text-[10px] text-muted-foreground/50 font-mono">
-                      {status.totalRuns} runs
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors">
-                  <span className="text-[11px]">View graph</span>
-                  <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
 
 function ActivityRow({ entry }: { entry: HotlEntry }) {
   const allAgents = { ...AGENTS };
   const cfg = allAgents[entry.agent];
   const accentColor = cfg?.accentColor ?? "#888";
+  let summaryObj = entry.summary;
+  if (typeof summaryObj === "string") {
+    try { summaryObj = JSON.parse(summaryObj); } catch {}
+  }
+  const overview = entry.overview || summaryObj?.overview || "";
 
   return (
     <div className={cn("flex items-start gap-3 px-4 py-3 text-sm", !entry.is_read && "bg-muted/20")}>
@@ -373,7 +307,7 @@ function ActivityRow({ entry }: { entry: HotlEntry }) {
             {relTime(entry.created_at)}
           </span>
         </div>
-        <p className="text-[12px] text-muted-foreground truncate">{entry.overview}</p>
+        <p className="text-[12px] text-muted-foreground truncate">{overview}</p>
       </div>
     </div>
   );

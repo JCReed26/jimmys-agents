@@ -1,0 +1,27 @@
+"""
+Organized models and api keys to import into agents preferred model 
+also we can expand in the future to choose which model to use for the agent
+
+"""
+import os
+from dotenv import load_dotenv
+from langchain_openrouter import ChatOpenRouter
+
+load_dotenv()
+
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+gemini_flash_model = ChatOpenRouter(
+    model="google/gemini-2.5-flash",
+    api_key=OPENROUTER_API_KEY,
+)
+
+cheap_haiku_three_model = ChatOpenRouter(
+    model="anthropic/claude-3-haiku",
+    api_key=OPENROUTER_API_KEY,
+)
+
+free_nvidia_model = ChatOpenRouter(
+    model="nvidia/llama-3.1-nemotron-70b-instruct:free",
+    api_key=OPENROUTER_API_KEY,
+)

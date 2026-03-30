@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AGENTS, WORKFLOWS } from "@/lib/agents";
+import { AGENTS } from "@/lib/agents";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,7 +23,6 @@ export default function ProfilePage() {
   }
 
   const agentList = Object.entries(AGENTS);
-  const workflowList = Object.entries(WORKFLOWS);
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -77,36 +76,6 @@ export default function ProfilePage() {
           <p className="text-[11px] text-muted-foreground/70 uppercase tracking-wider font-medium">Active agents</p>
           <div className="space-y-2">
             {agentList.map(([key, cfg]) => {
-              const Icon = cfg.icon;
-              return (
-                <div key={key} className="flex items-center gap-3 py-2">
-                  <div
-                    className="h-7 w-7 rounded flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: `${cfg.accentColor}15`, border: `1px solid ${cfg.accentColor}25` }}
-                  >
-                    <Icon className="h-3.5 w-3.5" style={{ color: cfg.accentColor }} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium">{cfg.displayName}</span>
-                    <p className="text-[11px] text-muted-foreground/60 truncate">{cfg.description}</p>
-                  </div>
-                  <Badge
-                    variant="outline"
-                    className="text-[9px] h-4 px-1.5 font-mono shrink-0"
-                    style={{ borderColor: `${cfg.accentColor}30`, color: cfg.accentColor }}
-                  >
-                    port {cfg.port}
-                  </Badge>
-                </div>
-              );
-            })}
-          </div>
-
-          <Separator />
-
-          <p className="text-[11px] text-muted-foreground/70 uppercase tracking-wider font-medium">Workflows</p>
-          <div className="space-y-2">
-            {workflowList.map(([key, cfg]) => {
               const Icon = cfg.icon;
               return (
                 <div key={key} className="flex items-center gap-3 py-2">
