@@ -2,17 +2,19 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Mail, Calendar, DollarSign, GitBranch,
   LayoutDashboard, Inbox, ScrollText, Activity,
   CalendarClock, Settings, User, ChevronRight,
-  Zap, BarChart3, PanelLeft,
+  Zap, BarChart3, PanelLeft, LogOut, Shield,
 } from "lucide-react";
+import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   SidebarProvider,
   Sidebar,
@@ -46,20 +48,19 @@ const agentLinks = [
   { href: "/agent/budget-agent",   label: "Budget",   icon: DollarSign,  color: "var(--agent-budget)" },
 ];
 
-const workflowLinks = [
-  { href: "/workflow/job-app-chain", label: "Job Applications", icon: GitBranch, color: "var(--agent-job)" },
-];
-
 const systemLinks = [
   { href: "/profile",   label: "Profile",  icon: User },
   { href: "/settings",  label: "Settings", icon: Settings },
+  { href: "/admin",     label: "Admin",    icon: Shield },
 ];
 
 // ─── Layout shell ─────────────────────────────────────────────────
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [counts, setCounts] = useState<NavCounts>({ hitl: 0, hotlUnread: 0 });
+  const [tenantName, setTenantName] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchCounts() {
@@ -68,10 +69,26 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
         if (r.ok) setCounts(await r.json());
       } catch { /* silently ignore */ }
     }
+    async function fetchMe() {
+      try {
+        const r = await fetch("/api/me", { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          setTenantName(data.tenant_name ?? null);
+        }
+      } catch { /* silently ignore */ }
+    }
     fetchCounts();
+    fetchMe();
     const iv = setInterval(fetchCounts, 15000);
     return () => clearInterval(iv);
   }, []);
+
+  async function handleSignOut() {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
 
   const monitoringLinks = [
     { href: "/observe",   label: "Observability", icon: BarChart3 },
@@ -79,6 +96,14 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     { href: "/inbox",     label: "HITL Inbox",     icon: Inbox,       badge: counts.hitl },
     { href: "/schedules", label: "Schedules",      icon: CalendarClock },
   ];
+
+  if (pathname.startsWith("/login")) {
+    return (
+      <main className="flex-1 min-h-screen w-full items-center justify-center bg-background p-4">
+        {children}
+      </main>
+    );
+  }
 
   return (
     <SidebarProvider>
@@ -88,7 +113,11 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-[var(--agent-calendar)]" />
             <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
-              Jimmy&apos;s Agents
+              {tenantName ? (
+                tenantName.length > 20 ? `${tenantName.substring(0, 17)}...` : tenantName
+              ) : (
+                <Skeleton className="h-4 w-24 inline-block" />
+              )}
             </span>
           </Link>
         </SidebarHeader>
@@ -123,22 +152,6 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
           <Separator className="mx-2 my-1 bg-sidebar-border" />
 
-          {/* Workflows */}
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
-              Workflows
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {workflowLinks.map((item) => (
-                  <NavItem key={item.href} {...item} pathname={pathname} accentColor={item.color} />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <Separator className="mx-2 my-1 bg-sidebar-border" />
-
           {/* Monitoring */}
           <SidebarGroup>
             <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
@@ -161,6 +174,26 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               <NavItem key={item.href} {...item} pathname={pathname} />
             ))}
           </SidebarMenu>
+          {/* User pill */}
+          <div className="flex items-center justify-between px-2 py-2 rounded-md hover:bg-sidebar-accent/40 transition-colors">
+            <div className="flex items-center gap-2 min-w-0 group-data-[collapsible=icon]:hidden">
+              <div className="h-6 w-6 rounded-full bg-sidebar-accent flex items-center justify-center shrink-0">
+                <User className="h-3 w-3 text-muted-foreground" />
+              </div>
+              <span className="text-xs text-muted-foreground truncate">
+                {tenantName ?? "…"}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={handleSignOut}
+              title="Sign out"
+            >
+              <LogOut className="h-3 w-3" />
+            </Button>
+          </div>
         </SidebarFooter>
       </Sidebar>
 

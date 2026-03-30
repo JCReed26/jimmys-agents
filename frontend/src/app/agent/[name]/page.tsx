@@ -12,10 +12,17 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Send, Loader2, ChevronRight, ChevronLeft, Cpu,
   CalendarClock, BookOpen, Inbox, Play, Check,
-  Bot, User, RotateCw, Clock, CheckCircle2,
+  Bot, User, RotateCw, Clock, CheckCircle2, DollarSign, Activity
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const CRON_PRESETS = [
   { label: "15m", value: "*/15 * * * *" },
@@ -46,54 +53,69 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
   const { name } = use(params);
   const cfg = AGENTS[name];
 
-  const { messages, sendMessage, isLoading, error } = useAgentChat(name);
+  const { 
+    messages, sendMessage, isLoading, error, 
+    threads, currentThreadId, switchThread, startNewThread, isInitializing 
+  } = useAgentChat(name);
   const [panelOpen, setPanelOpen] = useState(true);
-  const [activePanel, setActivePanel] = useState<"schedule" | "memory" | "hitl">("schedule");
+  const [activePanel, setActivePanel] = useState<"memory" | "history">("memory");
   const [inputVal, setInputVal] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Panel data
-  const [schedule, setSchedule] = useState<Schedule | null>(null);
-  const [schedEdit, setSchedEdit] = useState<Partial<Schedule>>({});
-  const [schedSaved, setSchedSaved] = useState(false);
-  const [schedSaving, setSchedSaving] = useState(false);
-  const [memory, setMemory] = useState<{ memory: string; rules: string } | null>(null);
-  const [hitlItems, setHitlItems] = useState<HitlItem[]>([]);
+  const [agentsMd, setAgentsMd] = useState<string>("");
+  const [agentsMdEditing, setAgentsMdEditing] = useState(false);
+  const [agentsMdDraft, setAgentsMdDraft] = useState("");
+  const [agentsMdSaving, setAgentsMdSaving] = useState(false);
+  const [agentsMdSaved, setAgentsMdSaved] = useState(false);
+  const [history, setHistory] = useState<any[]>([]);
   const [panelLoading, setPanelLoading] = useState(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Load schedule
-  useEffect(() => {
-    fetch("/api/schedules", { cache: "no-store" })
-      .then((r) => r.json())
-      .then((data: Schedule[]) => {
-        const s = data.find((x) => x.agent === name);
-        if (s) { setSchedule(s); setSchedEdit({ cron_expr: s.cron_expr, enabled: s.enabled, task_prompt: s.task_prompt ?? "" }); }
-      })
-      .catch(() => {});
-  }, [name]);
-
   const loadPanel = useCallback(async (panel: typeof activePanel) => {
     setPanelLoading(true);
     try {
       if (panel === "memory") {
-        const r = await fetch(`/api/memory/${name}`, { cache: "no-store" });
-        if (r.ok) setMemory(await r.json());
-      } else if (panel === "hitl") {
-        const r = await fetch(`/api/hitl?agent=${name}`, { cache: "no-store" });
+        const r = await fetch(`/api/agents-md/${name}`, { cache: "no-store" });
         if (r.ok) {
           const data = await r.json();
-          setHitlItems(data.items ?? data ?? []);
+          setAgentsMd(data.content ?? "");
+          setAgentsMdDraft(data.content ?? "");
+        }
+      } else if (panel === "history") {
+        const r = await fetch(`/api/runs/${name}?limit=10`, { cache: "no-store" });
+        if (r.ok) {
+          const data = await r.json();
+          setHistory(data);
         }
       }
     } finally {
       setPanelLoading(false);
     }
   }, [name]);
+
+  async function saveAgentsMd() {
+    setAgentsMdSaving(true);
+    try {
+      const r = await fetch(`/api/agents-md/${name}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: agentsMdDraft }),
+      });
+      if (r.ok) {
+        setAgentsMd(agentsMdDraft);
+        setAgentsMdEditing(false);
+        setAgentsMdSaved(true);
+        setTimeout(() => setAgentsMdSaved(false), 2000);
+      }
+    } finally {
+      setAgentsMdSaving(false);
+    }
+  }
 
   useEffect(() => {
     loadPanel(activePanel);
@@ -112,36 +134,6 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
       e.preventDefault();
       handleSend();
     }
-  }
-
-  async function saveSchedule() {
-    if (!schedEdit.cron_expr) return;
-    setSchedSaving(true);
-    try {
-      await fetch("/api/schedules", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: name, ...schedEdit }),
-      });
-      setSchedSaved(true);
-      setTimeout(() => setSchedSaved(false), 2000);
-    } finally {
-      setSchedSaving(false);
-    }
-  }
-
-  async function triggerNow() {
-    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-    await fetch(`${apiBase}/schedules/${name}/trigger`, { method: "POST" });
-  }
-
-  async function resolveHitl(id: number, decision: "approved" | "rejected") {
-    await fetch(`/api/hitl/${id}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ decision }),
-    });
-    setHitlItems((prev) => prev.filter((x) => x.id !== id));
   }
 
   if (!cfg) return (
@@ -227,7 +219,57 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
         </div>
 
         {/* Input */}
-        <div className="shrink-0 px-5 py-3 border-t border-border bg-background">
+        <div className="shrink-0 px-5 py-3 border-t border-border bg-background flex flex-col gap-2">
+          {/* Thread picker */}
+          <div className="flex items-center gap-2 px-1">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2 py-0 font-mono text-muted-foreground hover:text-foreground">
+                  {isInitializing ? (
+                     <Loader2 className="h-3 w-3 animate-spin mr-1.5" />
+                  ) : (
+                     <Clock className="h-3 w-3 mr-1.5" />
+                  )}
+                  {threads.find(t => t.id === currentThreadId)?.label || "Select thread"}
+                  <ChevronRight className="h-3 w-3 ml-1 rotate-90" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-48 bg-card border-border">
+                <div className="max-h-64 overflow-y-auto">
+                  {threads.map((t) => (
+                    <DropdownMenuItem 
+                      key={t.id} 
+                      onClick={() => switchThread(t.id)}
+                      className={cn(
+                        "text-xs cursor-pointer",
+                        t.id === currentThreadId && "bg-muted font-medium text-foreground"
+                      )}
+                    >
+                      <div className="flex flex-col gap-0.5 w-full">
+                        <span>{t.label}</span>
+                        <span className="text-[9px] text-muted-foreground/70 font-mono">
+                          {new Date(t.created_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      {t.id === currentThreadId && <Check className="h-3 w-3 ml-auto text-muted-foreground" />}
+                    </DropdownMenuItem>
+                  ))}
+                </div>
+                <DropdownMenuSeparator className="bg-border" />
+                <DropdownMenuItem 
+                  onClick={startNewThread}
+                  className="text-xs cursor-pointer text-blue-500 font-medium focus:text-blue-500"
+                >
+                  + New conversation
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            
+            {isInitializing && (
+               <span className="text-[10px] text-muted-foreground/50 animate-pulse">Loading history...</span>
+            )}
+          </div>
+          
           <div className="relative flex gap-2">
             <Textarea
               ref={inputRef}
@@ -265,9 +307,8 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
           {/* Panel tabs */}
           <div className="flex border-b border-border shrink-0">
             {([
-              { id: "schedule", label: "Schedule", icon: CalendarClock },
               { id: "memory",   label: "Memory",   icon: BookOpen },
-              { id: "hitl",     label: "HITL",     icon: Inbox },
+              { id: "history",  label: "Run History", icon: Clock },
             ] as const).map(({ id, label, icon: TabIcon }) => (
               <button
                 key={id}
@@ -288,23 +329,23 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
 
           {/* Panel content */}
           <div className="flex-1 overflow-y-auto p-4">
-            {activePanel === "schedule" && (
-              <SchedulePanel
-                schedule={schedule}
-                schedEdit={schedEdit}
-                setSchedEdit={setSchedEdit}
-                onSave={saveSchedule}
-                onTrigger={triggerNow}
-                saving={schedSaving}
-                saved={schedSaved}
+            {activePanel === "memory" && (
+              <MemoryPanel
+                content={agentsMd}
+                draft={agentsMdDraft}
+                editing={agentsMdEditing}
+                saving={agentsMdSaving}
+                saved={agentsMdSaved}
+                loading={panelLoading}
                 accentColor={cfg.accentColor}
+                onEdit={() => setAgentsMdEditing(true)}
+                onCancel={() => { setAgentsMdEditing(false); setAgentsMdDraft(agentsMd); }}
+                onChange={setAgentsMdDraft}
+                onSave={saveAgentsMd}
               />
             )}
-            {activePanel === "memory" && (
-              <MemoryPanel memory={memory} loading={panelLoading} accentColor={cfg.accentColor} />
-            )}
-            {activePanel === "hitl" && (
-              <HitlPanel items={hitlItems} loading={panelLoading} onResolve={resolveHitl} accentColor={cfg.accentColor} />
+            {activePanel === "history" && (
+              <HistoryPanel history={history} loading={panelLoading} accentColor={cfg.accentColor} />
             )}
           </div>
         </div>
@@ -387,180 +428,117 @@ function ChatMessage({
 
 // ─── Panel sub-components ────────────────────────────────────────
 
-function SchedulePanel({
-  schedule, schedEdit, setSchedEdit, onSave, onTrigger, saving, saved, accentColor,
+function MemoryPanel({
+  content, draft, editing, saving, saved, loading, accentColor,
+  onEdit, onCancel, onChange, onSave,
 }: {
-  schedule: Schedule | null;
-  schedEdit: Partial<Schedule>;
-  setSchedEdit: React.Dispatch<React.SetStateAction<Partial<Schedule>>>;
-  onSave: () => void;
-  onTrigger: () => void;
+  content: string;
+  draft: string;
+  editing: boolean;
   saving: boolean;
   saved: boolean;
+  loading: boolean;
   accentColor: string;
+  onEdit: () => void;
+  onCancel: () => void;
+  onChange: (s: string) => void;
+  onSave: () => void;
 }) {
+  if (loading) return <Skeleton className="h-40 w-full" />;
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Background schedule</p>
-        <Button variant="outline" size="sm" className="h-6 text-[11px] gap-1 px-2" onClick={onTrigger}>
-          <Play className="h-2.5 w-2.5" /> Run now
-        </Button>
+        <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">AGENTS.md</p>
+        {!editing && (
+          <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={onEdit}>
+            Edit
+          </Button>
+        )}
       </div>
 
-      <div className="space-y-3">
-        <div>
-          <label className="text-[11px] text-muted-foreground block mb-1.5">Cron expression</label>
-          <input
-            type="text"
-            value={schedEdit.cron_expr ?? ""}
-            onChange={(e) => setSchedEdit((p) => ({ ...p, cron_expr: e.target.value }))}
-            className="w-full bg-background border border-border rounded-md px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-            placeholder="*/30 * * * *"
-          />
-          <div className="flex flex-wrap gap-1 mt-2">
-            {CRON_PRESETS.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setSchedEdit((prev) => ({ ...prev, cron_expr: p.value }))}
-                className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:border-border/80 transition-colors font-mono"
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="text-[11px] text-muted-foreground block mb-1.5">Task prompt</label>
+      {editing ? (
+        <>
           <Textarea
-            value={schedEdit.task_prompt ?? ""}
-            onChange={(e) => setSchedEdit((p) => ({ ...p, task_prompt: e.target.value }))}
-            placeholder="Instructions for scheduled runs…"
-            rows={4}
-            className="text-sm bg-background border-border resize-none"
+            value={draft}
+            onChange={(e) => onChange(e.target.value)}
+            rows={18}
+            className="text-xs font-mono bg-background border-border resize-none"
           />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setSchedEdit((p) => ({ ...p, enabled: p.enabled ? 0 : 1 }))}
-            className={cn(
-              "text-[11px] px-3 py-1 rounded-full border font-mono transition-colors",
-              schedEdit.enabled
-                ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
-                : "border-border text-muted-foreground"
-            )}
-          >
-            {schedEdit.enabled ? "● enabled" : "○ disabled"}
-          </button>
-        </div>
-
-        <Button
-          className="w-full h-8 text-xs gap-1.5"
-          disabled={saving}
-          onClick={onSave}
-          style={saved ? {} : { backgroundColor: accentColor, color: "black" }}
-        >
-          {saved ? <><Check className="h-3 w-3" /> Saved</> : saving ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : "Save schedule"}
-        </Button>
-      </div>
-
-      {schedule?.last_run && (
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50 font-mono">
-          <Clock className="h-2.5 w-2.5" />
-          <span>Last run: {new Date(schedule.last_run).toLocaleString()}</span>
-        </div>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              className="flex-1 h-7 text-xs gap-1"
+              disabled={saving}
+              onClick={onSave}
+              style={saved ? {} : { backgroundColor: accentColor, color: "black" }}
+            >
+              {saved ? <><Check className="h-3 w-3" /> Saved</> : saving ? <><Loader2 className="h-3 w-3 animate-spin" /> Saving…</> : "Save"}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onCancel} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
+        </>
+      ) : (
+        <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap bg-muted/40 rounded-md p-3 leading-relaxed overflow-y-auto max-h-[calc(100vh-20rem)]">
+          {content || <span className="text-muted-foreground/40 italic">Empty — the agent will populate this during runs.</span>}
+        </pre>
       )}
     </div>
   );
 }
 
-function MemoryPanel({
-  memory, loading, accentColor,
+function HistoryPanel({
+  history, loading, accentColor,
 }: {
-  memory: { memory: string; rules: string } | null;
+  history: any[];
   loading: boolean;
   accentColor: string;
 }) {
   if (loading) return <Skeleton className="h-40 w-full" />;
-  if (!memory) return (
+  if (!history || history.length === 0) return (
     <p className="text-[12px] text-muted-foreground text-center py-8">
-      No memory files found. The agent will create them during runs.
+      No run history found.
     </p>
   );
   return (
-    <div className="space-y-4">
-      {memory.memory && (
-        <div>
-          <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-2">MEMORY.md</p>
-          <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap break-all bg-muted/40 rounded-md p-3 leading-relaxed max-h-48 overflow-y-auto">
-            {memory.memory}
-          </pre>
-        </div>
-      )}
-      {memory.rules && (
-        <div>
-          <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider mb-2">RULES.md</p>
-          <pre className="text-[11px] font-mono text-foreground/70 whitespace-pre-wrap break-all bg-muted/40 rounded-md p-3 leading-relaxed max-h-48 overflow-y-auto">
-            {memory.rules}
-          </pre>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function HitlPanel({
-  items, loading, onResolve, accentColor,
-}: {
-  items: HitlItem[];
-  loading: boolean;
-  onResolve: (id: number, decision: "approved" | "rejected") => void;
-  accentColor: string;
-}) {
-  if (loading) return <Skeleton className="h-20 w-full" />;
-  const pending = items.filter((x) => x.status === "pending");
-  if (pending.length === 0) return (
-    <div className="text-center py-8">
-      <CheckCircle2 className="h-8 w-8 text-muted-foreground/30 mx-auto mb-2" />
-      <p className="text-[12px] text-muted-foreground">No pending items</p>
-    </div>
-  );
-  return (
     <div className="space-y-3">
-      {pending.map((item) => {
-        let payload: unknown = item.payload;
-        try { payload = JSON.parse(item.payload); } catch {}
-        return (
-          <div key={item.id} className="border border-border rounded-md p-3 space-y-2">
-            <p className="text-[11px] text-muted-foreground font-mono">
-              {new Date(item.created_at).toLocaleString()}
-            </p>
-            <pre className="text-[11px] font-mono text-foreground/80 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
-              {typeof payload === "object" ? JSON.stringify(payload, null, 2) : String(payload)}
-            </pre>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                className="flex-1 h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white border-0"
-                onClick={() => onResolve(item.id, "approved")}
-              >
-                Approve
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="flex-1 h-7 text-[11px] border-destructive/40 text-destructive hover:bg-destructive/10"
-                onClick={() => onResolve(item.id, "rejected")}
-              >
-                Reject
-              </Button>
-            </div>
+      {history.map((run) => (
+        <div key={run.id} className="border border-border rounded-md p-3 space-y-1.5 bg-card">
+          <div className="flex items-center justify-between mb-1">
+            <span className={cn(
+              "text-[10px] px-1.5 py-0.5 rounded-full font-mono uppercase tracking-wider font-semibold",
+              run.status === "success" || run.status === "done" ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" :
+              run.status === "error" ? "bg-destructive/10 text-destructive border border-destructive/20" :
+              "bg-muted text-muted-foreground border border-border"
+            )}>
+              {run.status}
+            </span>
+            <span className="text-[10px] text-muted-foreground font-mono">
+              {new Date(run.started_at).toLocaleString()}
+            </span>
           </div>
-        );
-      })}
+          <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+            {run.cost_usd !== undefined && (
+              <span className="flex items-center"><DollarSign className="w-3 h-3 mr-0.5" />{Number(run.cost_usd).toFixed(4)}</span>
+            )}
+            {run.total_tokens !== undefined && (
+              <span className="flex items-center"><Activity className="w-3 h-3 mr-0.5" />{run.total_tokens}</span>
+            )}
+          </div>
+          {run.langsmith_run_id && (
+             <a
+               href={`https://smith.langchain.com/`}
+               target="_blank"
+               rel="noopener noreferrer"
+               className="text-[10px] text-blue-500 hover:underline block truncate mt-1 pt-1 border-t border-border/50"
+             >
+               Trace: {run.langsmith_run_id}
+             </a>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
-

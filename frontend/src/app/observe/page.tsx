@@ -52,7 +52,7 @@ export default function ObservePage() {
       <div>
         <h1 className="text-base font-semibold">Observability</h1>
         <p className="text-[12px] text-muted-foreground mt-0.5">
-          Cost, token usage, and run performance across all agents and workflows
+          Cost, token usage, and run performance across all agents
         </p>
       </div>
 
@@ -106,7 +106,7 @@ export default function ObservePage() {
       {/* Per-agent breakdown */}
       <div>
         <p className="text-[11px] text-muted-foreground/70 uppercase tracking-wider font-medium mb-3">
-          Per agent / workflow
+          Per agent
         </p>
         <Card className="bg-card border-border">
           <CardContent className="p-0">

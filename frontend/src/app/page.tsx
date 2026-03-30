@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { AGENTS, WORKFLOWS } from "@/lib/agents";
+import { AGENTS } from "@/lib/agents";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -20,7 +20,10 @@ interface AgentStatus {
   hitlCount: number;
   nextRun?: string;
   lastRun?: string;
+  lastRunStatus?: string;
+  lastError?: string;
   totalRuns: number;
+  errorRuns?: number;
   tokenCount?: string;
   costToday?: number;
 }
@@ -28,7 +31,8 @@ interface AgentStatus {
 interface HotlEntry {
   id: number;
   agent: string;
-  overview: string;
+  overview?: string;
+  summary?: any;
   created_at: string;
   is_read: number;
   status?: string;
@@ -77,7 +81,6 @@ export default function DashboardPage() {
   const { agentData, activity, stats, loading } = useData();
 
   const agentEntries = Object.entries(AGENTS);
-  const workflowEntries = Object.entries(WORKFLOWS);
   const allStatuses = Object.values(agentData);
   const runningCount = allStatuses.filter((s) => s.status === "RUNNING").length;
   const hitlTotal = allStatuses.reduce((n, s) => n + (s.hitlCount ?? 0), 0);
@@ -95,10 +98,10 @@ export default function DashboardPage() {
           loading={loading}
         />
         <StatCard
-          label="Workflows"
-          value={`${workflowEntries.length}`}
-          sub={`${agentData["job-app-chain"]?.totalRuns ?? 0} total runs`}
-          icon={<GitBranch className="h-4 w-4" />}
+          label="Runs Today"
+          value={`${stats?.total_runs ?? 0}`}
+          sub="across all agents"
+          icon={<Activity className="h-4 w-4" />}
           loading={loading}
         />
         <StatCard
@@ -112,27 +115,18 @@ export default function DashboardPage() {
         <StatCard
           label="Cost Today"
           value={`$${costToday.toFixed(2)}`}
-          sub={`${stats?.total_runs ?? "—"} runs total`}
+          sub={`${stats?.total_tokens ?? 0} tokens`}
           icon={<DollarSign className="h-4 w-4" />}
           loading={loading}
         />
       </div>
 
-      {/* Agents + Workflows */}
+      {/* Agents */}
       <div>
         <SectionLabel>Agents</SectionLabel>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {agentEntries.map(([key, cfg]) => (
             <AgentCard key={key} agentKey={key} cfg={cfg} status={agentData[key]} loading={loading} />
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <SectionLabel>Workflows</SectionLabel>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {workflowEntries.map(([key, cfg]) => (
-            <WorkflowCard key={key} agentKey={key} cfg={cfg} status={agentData[key]} loading={loading} />
           ))}
         </div>
       </div>
@@ -264,9 +258,19 @@ function AgentCard({
               </div>
 
               {status?.lastRun && (
-                <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono">
-                  <Clock className="h-2.5 w-2.5" />
-                  <span>last run {relTime(status.lastRun)}</span>
+                <div className="flex flex-col gap-1 mt-1">
+                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono">
+                    <Clock className="h-2.5 w-2.5" />
+                    <span>last run {relTime(status.lastRun)}</span>
+                    {status.lastRunStatus === "error" && (
+                       <AlertCircle className="h-2.5 w-2.5 text-destructive ml-1" />
+                    )}
+                  </div>
+                  {status.lastRunStatus === "error" && status.lastError && (
+                    <p className="text-[10px] text-destructive truncate max-w-full">
+                      Error: {status.lastError}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -277,86 +281,16 @@ function AgentCard({
   );
 }
 
-function WorkflowCard({
-  agentKey, cfg, status, loading,
-}: {
-  agentKey: string;
-  cfg: typeof WORKFLOWS[string];
-  status?: AgentStatus;
-  loading: boolean;
-}) {
-  const Icon = cfg.icon;
-  const isRunning = status?.status === "RUNNING";
-
-  return (
-    <Link href={`/workflow/${agentKey}`} className="block group">
-      <Card className="bg-card border-border transition-colors hover:border-border/80 h-full">
-        <CardContent className="p-4">
-          {loading ? (
-            <Skeleton className="h-24 w-full" />
-          ) : (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className="h-8 w-8 rounded-md flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: `${cfg.accentColor}18`, border: `1px solid ${cfg.accentColor}30` }}
-                  >
-                    <Icon className="h-4 w-4" style={{ color: cfg.accentColor }} />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium leading-tight">{cfg.displayName}</p>
-                    <p className="text-[11px] text-muted-foreground leading-tight mt-0.5">{cfg.description}</p>
-                  </div>
-                </div>
-                <Badge
-                  variant="outline"
-                  className="text-[10px] font-mono shrink-0"
-                  style={{ borderColor: `${cfg.accentColor}40`, color: cfg.accentColor }}
-                >
-                  workflow
-                </Badge>
-              </div>
-
-              {/* Step preview */}
-              <div className="flex items-center gap-1 text-[10px] text-muted-foreground/50 font-mono overflow-hidden">
-                {["reader", "scraper", "classifier", "optimizer", "writer"].map((s, i, arr) => (
-                  <span key={s} className="flex items-center gap-1">
-                    <span className="px-1.5 py-0.5 rounded bg-muted/60">{s}</span>
-                    {i < arr.length - 1 && <span className="opacity-40">→</span>}
-                  </span>
-                ))}
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <StatusDot running={isRunning} color={cfg.accentColor} />
-                  <span className="text-[11px] text-muted-foreground font-mono">
-                    {isRunning ? "running" : "idle"}
-                  </span>
-                  {status?.totalRuns !== undefined && (
-                    <span className="text-[10px] text-muted-foreground/50 font-mono">
-                      {status.totalRuns} runs
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 text-muted-foreground/50 group-hover:text-muted-foreground transition-colors">
-                  <span className="text-[11px]">View graph</span>
-                  <ArrowRight className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
 
 function ActivityRow({ entry }: { entry: HotlEntry }) {
-  const allAgents = { ...AGENTS, ...WORKFLOWS };
+  const allAgents = { ...AGENTS };
   const cfg = allAgents[entry.agent];
   const accentColor = cfg?.accentColor ?? "#888";
+  let summaryObj = entry.summary;
+  if (typeof summaryObj === "string") {
+    try { summaryObj = JSON.parse(summaryObj); } catch {}
+  }
+  const overview = entry.overview || summaryObj?.overview || "";
 
   return (
     <div className={cn("flex items-start gap-3 px-4 py-3 text-sm", !entry.is_read && "bg-muted/20")}>
@@ -373,7 +307,7 @@ function ActivityRow({ entry }: { entry: HotlEntry }) {
             {relTime(entry.created_at)}
           </span>
         </div>
-        <p className="text-[12px] text-muted-foreground truncate">{entry.overview}</p>
+        <p className="text-[12px] text-muted-foreground truncate">{overview}</p>
       </div>
     </div>
   );

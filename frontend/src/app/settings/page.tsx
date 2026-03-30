@@ -1,17 +1,49 @@
 "use client";
 
-import { useState } from "react";
-import { AGENTS, WORKFLOWS } from "@/lib/agents";
+import { useState, useEffect } from "react";
+import { AGENTS } from "@/lib/agents";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Settings, Server, AlertTriangle, Check, Loader2 } from "lucide-react";
+import { Settings, Server, AlertTriangle, Check, Loader2, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+interface ServiceHealth {
+  name: string;
+  port: number;
+  status: "ok" | "error" | "timeout" | "degraded";
+  latency_ms: number;
+}
 
 export default function SettingsPage() {
   const [clearing, setClearing] = useState(false);
   const [cleared, setCleared] = useState("");
+  const [health, setHealth] = useState<ServiceHealth[]>([]);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+
+  async function fetchHealth() {
+    setHealthLoading(true);
+    try {
+      const res = await fetch("/api/health");
+      if (res.ok) {
+        const data = await res.json();
+        setHealth(data.services);
+        setLastChecked(new Date());
+      }
+    } catch (e) {
+      console.error("Failed to fetch health", e);
+    } finally {
+      setHealthLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function clearLogs() {
     setClearing(true);
@@ -24,7 +56,7 @@ export default function SettingsPage() {
     }
   }
 
-  const allSources = { ...AGENTS, ...WORKFLOWS };
+  const allSources = { ...AGENTS };
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
@@ -39,49 +71,64 @@ export default function SettingsPage() {
       {/* System info */}
       <Card className="bg-card border-border">
         <CardContent className="p-5 space-y-4">
-          <p className="text-[11px] text-muted-foreground/70 uppercase tracking-wider font-medium flex items-center gap-1.5">
-            <Server className="h-3 w-3" /> Services
-          </p>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-muted-foreground/70 uppercase tracking-wider font-medium flex items-center gap-1.5">
+              <Server className="h-3 w-3" /> Services
+            </p>
+            <div className="flex items-center gap-2">
+              {lastChecked && (
+                <span className="text-[10px] text-muted-foreground">
+                  Last checked: {lastChecked.toLocaleTimeString()}
+                </span>
+              )}
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={fetchHealth} disabled={healthLoading}>
+                <RefreshCw className={cn("h-3 w-3 text-muted-foreground", healthLoading && "animate-spin")} />
+              </Button>
+            </div>
+          </div>
+          
           <div className="divide-y divide-border">
             <div className="flex items-center justify-between py-2">
-              <div>
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-emerald-500" />
                 <span className="text-sm font-medium">Dashboard</span>
                 <span className="text-[11px] text-muted-foreground ml-2">Next.js frontend</span>
               </div>
-              <code className="text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
-                :3000
-              </code>
-            </div>
-            <div className="flex items-center justify-between py-2">
-              <div>
-                <span className="text-sm font-medium">API Server</span>
-                <span className="text-[11px] text-muted-foreground ml-2">FastAPI backend</span>
+              <div className="flex items-center gap-3">
+                <code className="text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
+                  :3000
+                </code>
               </div>
-              <code className="text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
-                :8080
-              </code>
             </div>
-            {Object.entries(allSources).map(([key, cfg]) => {
-              const Icon = cfg.icon;
-              return (
-                <div key={key} className="flex items-center justify-between py-2">
+            
+            {healthLoading && health.length === 0 ? (
+              <div className="py-4 flex justify-center">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              health.map((svc) => (
+                <div key={svc.name} className="flex items-center justify-between py-2">
                   <div className="flex items-center gap-2">
-                    <Icon className="h-3.5 w-3.5" style={{ color: cfg.accentColor }} />
-                    <span className="text-sm">{cfg.displayName}</span>
-                    <Badge
-                      variant="outline"
-                      className="text-[9px] h-3.5 px-1 font-mono"
-                      style={{ borderColor: `${cfg.accentColor}30`, color: cfg.accentColor }}
-                    >
-                      {cfg.type}
-                    </Badge>
+                    <div className={cn(
+                      "h-2 w-2 rounded-full",
+                      svc.status === "ok" ? "bg-emerald-500" :
+                      svc.status === "degraded" || svc.status === "timeout" ? "bg-amber-500" :
+                      "bg-destructive"
+                    )} />
+                    <span className="text-sm font-medium">{svc.name}</span>
+                    <span className="text-[11px] text-muted-foreground ml-2 capitalize">{svc.status}</span>
                   </div>
-                  <code className="text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded">
-                    :{cfg.port}
-                  </code>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-muted-foreground font-mono">
+                      {svc.latency_ms}ms
+                    </span>
+                    <code className="text-[11px] font-mono text-muted-foreground bg-muted/50 px-2 py-0.5 rounded w-12 text-center">
+                      :{svc.port}
+                    </code>
+                  </div>
                 </div>
-              );
-            })}
+              ))
+            )}
           </div>
         </CardContent>
       </Card>

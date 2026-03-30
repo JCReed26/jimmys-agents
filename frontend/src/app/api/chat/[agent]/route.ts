@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getServerAccessToken, bearerHeaders } from '@/lib/auth-server';
 
 const API_BASE = process.env.AGENT_API_URL ?? 'http://localhost:8080';
 
@@ -6,6 +7,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ agent: string }> }
 ) {
+  const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ messages: [] }, { status: 401 });
   const { agent } = await params;
   const url = new URL(req.url);
   const threadId = url.searchParams.get('thread_id') ?? '';
@@ -14,7 +17,7 @@ export async function GET(
   try {
     const r = await fetch(
       `${API_BASE}/chat/${agent}/history?thread_id=${encodeURIComponent(threadId)}`,
-      { cache: 'no-store' }
+      { headers: bearerHeaders(token), cache: 'no-store' }
     );
     if (!r.ok) return NextResponse.json({ messages: [] });
     return NextResponse.json(await r.json());
@@ -27,16 +30,17 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ agent: string }> }
 ) {
+  const token = await getServerAccessToken();
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const { agent } = await params;
   try {
     const body = await req.json();
-    // body has shape: { thread_id, messages }
-    // Gateway expects exactly this format — no LangGraph fields needed here
     const upstream = await fetch(`${API_BASE}/agents/${agent}/run`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
+        ...bearerHeaders(token),
       },
       body: JSON.stringify(body),
     });

@@ -1,20 +1,22 @@
-# Agent Memory
+# Agent Memory & Budget Preferences
 
-## What I Am
-Budget manager agent for James. I read and write CSV files in data/ that stay in sync with a Google Sheet.
+## Current Goals
+- Primary Goal: Save for a car
+- Secondary Goal: Build Emergency Fund
+- End of Month Policy: Split all unspent budget 50/50 between the Car fund and the Emergency Fund.
+
+## Budget Tracking Preferences
+- Receipt Processing: [Pending Budget Architect] (e.g., "Full Itemization" OR "Total Amount Only")
+- Budget Strictness: High accountability. 
 
 ## Current State
-- Spreadsheet ID: (not yet set — check ../data/budget_state.json)
-- Budget structure: (not yet built — run build-budget skill)
-- Last run: (no runs yet)
+- Spreadsheet ID: (not yet set)
+- Budget structure: (not yet built — run budget-architect skill)
+- Last daily checkin: (no runs yet)
 
 ## Known CSV Files
 (populated after first sync)
 
-## Budget Categories
-(populated after build-budget skill runs)
-
 ## Notes
-- I update this file after significant runs or structural changes
-- CSV files live in budget-deepagent/data/
-- Sync happens automatically before and after each conversation
+- I update this file after significant runs or structural changes.
+- Sync happens automatically before and after each conversation.

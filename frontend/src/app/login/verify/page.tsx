@@ -1,0 +1,124 @@
+"use client";
+
+import { Suspense, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@/lib/supabase";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { GeistMono } from "geist/font/mono";
+
+const MAX_ATTEMPTS = 5;
+
+function VerifyForm() {
+  const [code, setCode] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [attempts, setAttempts] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const email = searchParams.get("email") ?? "";
+
+  const tooManyAttempts = attempts >= MAX_ATTEMPTS;
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email) {
+      router.push("/login");
+      return;
+    }
+    if (tooManyAttempts) return;
+    setError(null);
+    setLoading(true);
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.verifyOtp({
+      email,
+      token: code,
+      type: "email",
+    });
+
+    if (error) {
+      const next = attempts + 1;
+      setAttempts(next);
+      setError(
+        next >= MAX_ATTEMPTS
+          ? "Too many attempts — go back and request a new code"
+          : error.message
+      );
+      setLoading(false);
+      return;
+    }
+
+    router.push("/");
+  }
+
+  return (
+    <Card className="w-full max-w-sm">
+      <CardHeader>
+        <CardTitle>Check your email</CardTitle>
+        <CardDescription>
+          Enter the 6-digit code sent to{" "}
+          <span className="text-foreground font-medium">{email}</span>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="code">One-time code</Label>
+            <Input
+              ref={inputRef}
+              id="code"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              placeholder="123456"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+              className={`text-center text-2xl tracking-[0.5em] ${GeistMono.className}`}
+              required
+              disabled={tooManyAttempts}
+            />
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={loading || code.length !== 6 || tooManyAttempts}
+          >
+            {loading ? "Verifying…" : "Verify"}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full"
+            onClick={() => router.push("/login")}
+          >
+            ← Back
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function VerifyPage() {
+  return (
+    <Suspense fallback={<Card className="w-full max-w-sm p-6"><div className="animate-pulse flex space-x-4"><div className="flex-1 space-y-4 py-1"><div className="h-4 bg-muted rounded w-3/4"></div><div className="space-y-2"><div className="h-4 bg-muted rounded"></div><div className="h-4 bg-muted rounded w-5/6"></div></div></div></div></Card>}>
+      <VerifyForm />
+    </Suspense>
+  );
+}

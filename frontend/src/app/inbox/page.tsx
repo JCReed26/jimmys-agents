@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { AGENTS, WORKFLOWS, ALL_SOURCES } from "@/lib/agents";
+import { AGENTS, ALL_SOURCES } from "@/lib/agents";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,7 +18,7 @@ interface HitlItem {
   step?: string;
 }
 
-type TabId = "all" | "agents" | "workflows";
+type TabId = "all" | "agents";
 
 export default function InboxPage() {
   const [items, setItems] = useState<HitlItem[]>([]);
@@ -62,11 +62,9 @@ export default function InboxPage() {
   }
 
   const agentKeys = new Set(Object.keys(AGENTS));
-  const workflowKeys = new Set(Object.keys(WORKFLOWS));
 
   const filtered = items.filter((item) => {
     if (tab === "agents") return agentKeys.has(item.agent);
-    if (tab === "workflows") return workflowKeys.has(item.agent);
     return true;
   });
 
@@ -75,12 +73,9 @@ export default function InboxPage() {
 
   const pendingAll = items.filter((x) => x.status === "pending").length;
   const pendingAgents = items.filter((x) => x.status === "pending" && agentKeys.has(x.agent)).length;
-  const pendingWorkflows = items.filter((x) => x.status === "pending" && workflowKeys.has(x.agent)).length;
 
   const tabs: { id: TabId; label: string; count: number }[] = [
     { id: "all",       label: "All",       count: pendingAll },
-    { id: "agents",    label: "Agents",    count: pendingAgents },
-    { id: "workflows", label: "Workflows", count: pendingWorkflows },
   ];
 
   return (

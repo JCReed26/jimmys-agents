@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 
 export interface Message {
   id: string;
@@ -14,13 +14,55 @@ export interface Message {
   }>;
 }
 
-function getOrCreateThreadId(agent: string): string {
-  const key = `jimmys-agents:thread:${agent}`;
-  const existing = localStorage.getItem(key);
-  if (existing) return existing;
-  const newId = `thread-${agent}-${crypto.randomUUID()}`;
-  localStorage.setItem(key, newId);
-  return newId;
+export interface Thread {
+  id: string;
+  label: string;
+  created_at: string;
+}
+
+function getThreads(agent: string): Thread[] {
+  try {
+    const key = `jimmys-agents:threads:${agent}`;
+    const stored = localStorage.getItem(key);
+    if (stored) return JSON.parse(stored);
+  } catch (e) {
+    console.error("Failed to parse threads from local storage", e);
+  }
+  
+  // Migration path: check if old single thread exists
+  const oldKey = `jimmys-agents:thread:${agent}`;
+  const oldId = localStorage.getItem(oldKey);
+  if (oldId) {
+    const initialThreads = [{
+      id: oldId,
+      label: "Thread 1",
+      created_at: new Date().toISOString()
+    }];
+    try {
+      localStorage.setItem(`jimmys-agents:threads:${agent}`, JSON.stringify(initialThreads));
+      localStorage.removeItem(oldKey); // Clean up old key
+      return initialThreads;
+    } catch {
+      // ignore
+    }
+  }
+  
+  return [];
+}
+
+function saveThreads(agent: string, threads: Thread[]) {
+  const key = `jimmys-agents:threads:${agent}`;
+  // Keep max 10 threads
+  const toSave = threads.slice(0, 10);
+  localStorage.setItem(key, JSON.stringify(toSave));
+}
+
+function createNewThread(agent: string, threadCount: number): Thread {
+  return {
+    id: `thread-${agent}-${crypto.randomUUID()}`,
+    label: `Thread ${threadCount + 1}`,
+    created_at: new Date().toISOString()
+  };
 }
 
 export function useAgentChat(agentName: string) {
@@ -28,11 +70,86 @@ export function useAgentChat(agentName: string) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<'idle' | 'running' | 'error'>('idle');
+  
+  // Thread management
+  const [threads, setThreads] = useState<Thread[]>([]);
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
+
+  // Initialize threads on mount
+  useEffect(() => {
+    const loadedThreads = getThreads(agentName);
+    
+    if (loadedThreads.length === 0) {
+      const newThread = createNewThread(agentName, 0);
+      setThreads([newThread]);
+      setCurrentThreadId(newThread.id);
+      saveThreads(agentName, [newThread]);
+    } else {
+      setThreads(loadedThreads);
+      setCurrentThreadId(loadedThreads[0].id); // Select most recent by default
+    }
+  }, [agentName]);
+
+  // Load history when thread changes
+  useEffect(() => {
+    async function loadHistory() {
+      if (!currentThreadId) return;
+      
+      setIsInitializing(true);
+      setError(null);
+      
+      try {
+        const response = await fetch(`/api/chat/${agentName}?thread_id=${encodeURIComponent(currentThreadId)}`);
+        if (!response.ok) {
+           if (response.status !== 404) {
+             throw new Error(`Failed to load history: ${response.statusText}`);
+           }
+           setMessages([]); // Not found just means no history yet
+           return;
+        }
+        
+        const data = await response.json();
+        
+        if (data.messages && Array.isArray(data.messages)) {
+          const formattedMessages = data.messages.map((m: any, idx: number) => ({
+            id: m.id || `msg-${idx}`,
+            role: m.role === 'user' ? 'human' : 'assistant',
+            content: m.content || '',
+            // If we have tool calls/results in history, we'd format them here
+            // but for now just getting basic text content
+          }));
+          setMessages(formattedMessages);
+        } else {
+          setMessages([]);
+        }
+      } catch (err) {
+        console.error("Error loading history:", err);
+        setError("Failed to load chat history");
+        setMessages([]); // Fallback to empty on error
+      } finally {
+        setIsInitializing(false);
+      }
+    }
+    
+    loadHistory();
+  }, [agentName, currentThreadId]);
+
+  const switchThread = useCallback((threadId: string) => {
+    setCurrentThreadId(threadId);
+  }, []);
+
+  const startNewThread = useCallback(() => {
+    const newThread = createNewThread(agentName, threads.length);
+    const updatedThreads = [newThread, ...threads]; // Prepend new thread
+    setThreads(updatedThreads);
+    saveThreads(agentName, updatedThreads);
+    setCurrentThreadId(newThread.id);
+    setMessages([]);
+  }, [agentName, threads]);
 
   const sendMessage = useCallback(async (content: string) => {
-    if (!content.trim()) return;
-
-    const threadId = getOrCreateThreadId(agentName);
+    if (!content.trim() || !currentThreadId) return;
 
     const userMessage: Message = {
       id: `user-${crypto.randomUUID()}`,
@@ -58,7 +175,7 @@ export function useAgentChat(agentName: string) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          thread_id: threadId,
+          thread_id: currentThreadId,
           messages: bodyMessages,
         }),
       });
@@ -187,7 +304,18 @@ export function useAgentChat(agentName: string) {
         return newMessages;
       });
     }
-  }, [agentName]);
+  }, [agentName, currentThreadId]);
 
-  return { messages, sendMessage, isLoading, error, runStatus };
+  return { 
+    messages, 
+    sendMessage, 
+    isLoading, 
+    error, 
+    runStatus,
+    threads,
+    currentThreadId,
+    switchThread,
+    startNewThread,
+    isInitializing
+  };
 }

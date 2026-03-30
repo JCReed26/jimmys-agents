@@ -95,7 +95,24 @@ make run-budget       # budget-deepagent on :8003 (interactive)
 make run-job-chain    # job-app-chain LangGraph server on :8004 (interactive)
 ```
 
-**Adding a new agent**: create `agents/{name}/` with `agent.py` + `langgraph.json` + `skills/`. Add entry to `agents.yaml`. Add `run-{name}` target to Makefile.
+**Adding a new agent**:
+1. Copy `agents/_template/` to `agents/{name}/`
+2. Edit `agents/{name}/agent.py` and `skills/` to define the agent.
+3. Add an entry to `agents.yaml` (copy format from existing entry).
+4. Add an entry to `frontend/src/lib/agents.ts` (copy existing pattern).
+5. Add a `run-{name}` target to `Makefile` (copy existing target).
+6. Run `POST http://localhost:8080/registry/reload` to hot-load without restart.
+
+**Adding a new tenant (Client)**:
+1. In the Supabase dashboard, insert a new row in the `tenants` table.
+2. The user will need to log in to create an auth record in Supabase.
+3. Update the `tenants` table row to link `auth_user_id` to their Supabase auth UID.
+
+**Adding a new user**:
+Users authenticate via email OTP via Supabase. A user record is created on their first login. Then their `auth.uid()` needs to be linked to a `tenant_id` in the `tenants` table.
+
+**Allowing a tenant access to an instance of an agent**:
+1. In the Postgres database, insert a row into the `tenant_agents` table linking the `tenant_id` to the `agent_registry_id` (from the `agent_registry` table, populated from `agents.yaml`).
 
 ---
 
@@ -109,8 +126,8 @@ from deepagents.backends import FilesystemBackend
 from deepagents.middleware import AgentMiddleware
 
 class MyMiddleware(AgentMiddleware):
-    async def abefore_agent(self, state, runtime): ...  # pre-run hook
-    async def aafter_agent(self, state, runtime): ...   # post-run hook (post HOTL here)
+    async def before_agent(self, state, runtime): ...  # pre-run hook
+    async def after_agent(self, state, runtime): ...   # post-run hook (post HOTL here)
 
 agent = create_deep_agent(
     model=llm,
@@ -145,16 +162,35 @@ FastAPI on :8080. All paths:
 - `GET /runs`, `POST /runs/start`, `POST /runs/{id}/finish` — run lifecycle
 - `GET|POST /schedules`, `POST /schedules/{agent}/trigger` — APScheduler
 - `GET /stats`, `GET /search` — observability
-- `GET /agents/{name}/memory`, `GET /agents/{name}/rules` — file reads
+- `GET /agents/{name}/agents-md`, `PUT /agents/{name}/agents-md` — read/write agent AGENTS.md from filesystem
+- `GET /admin/tenants`, `POST /admin/tenants` — tenant management (superadmin only)
+- `GET /admin/agents`, `POST/DELETE /admin/tenant-agents` — agent assignment (superadmin only)
+- `GET/POST/DELETE /admin/users` — user-tenant linking (superadmin only)
+
+---
+
+## Context Retrieval Hooks
+
+Read these before working in the corresponding areas:
+
+| Working on | Read first |
+|---|---|
+| `backend/auth_middleware.py`, admin routes, tenant/user management | `docs/dev-notes/auth-flow.md` |
+| `backend/db_postgres.py`, `backend/sql/`, `backend/migrations/` | `docs/dev-notes/database.md` |
+| `frontend/src/` (any component, hook, or API route) | `docs/dev-notes/frontend-patterns.md` |
+| Current PR, what was recently built, what's next | `docs/dev-notes/active-state.md` |
+| Bugs, open issues, resolved history | `docs/issues.md` |
+| System architecture, run lifecycle, HITL/HOTL flow | `docs/system-overview.md` |
+| Building or modifying an agent | `docs/deepagents.md` + `agents/_template/` |
+| AG-UI protocol, stream events | `docs/ag-ui-api.md` |
 
 ---
 
 ## Active Rules
 
-- **State DB at `data/state.db`**: SQLite for all HITL, HOTL, runs, schedules. Schema in `backend/db.py`. Never delete without warning.
-- **HITL protocol**: Agent calls `POST /hitl` → polls `GET /hitl/{id}` → dashboard shows approve/reject → stored in DB.
-- **HOTL logging**: After each run, agent middleware calls `POST /hotl` with `{tools, thoughts, overview}`. Dashboard shows in `/logs`.
-- **MEMORY.md + RULES.md per agent**: Agent writes these. Dashboard reads via `GET /api/memory/{name}`. Never overwrite with unrelated content.
+- **HOTL is gateway-owned**: The gateway's `StreamTranslator` accumulates tool calls, cost, and tokens from the AG-UI stream and writes the HOTL entry on stream close. Agents do NOT call `POST /hotl` directly.
+- **HITL protocol**: Agent calls `POST /hitl` with `X-Internal-Key` header → polls `GET /hitl/{id}` → dashboard shows approve/reject → agent continues on next poll.
+- **AGENTS.md per agent**: `{agent.dir}/skills/AGENTS.md` is the agent's persistent notebook. Dashboard reads/writes via `GET/PUT /agents/{name}/agents-md`. This is the only per-agent memory the dashboard exposes. Do not create `MEMORY.md`/`RULES.md` UI — those are agent-internal.
 - **APScheduler in backend**: Reads `schedules` DB table on startup. `/schedules` API hot-reloads scheduler — no restart needed.
 - **Per-agent accent colors**: gmail=#00ff88, calendar=#00d4ff, budget=#a855f7, job-chain=#f59e0b.
 - **Secrets in `secrets/`**: Agents look for `../../secrets/` (two levels up from `agents/{name}/`).
@@ -162,10 +198,19 @@ FastAPI on :8080. All paths:
 - **Gemini tool compatibility**: Avoid batch tool schemas. Use individual atomic tools only.
 - **temperature=0**: All agents use deterministic outputs.
 - **LangSmith traces**: MetricsCallback only works in REPL mode. For `langgraph dev` mode, LangSmith traces automatically via env vars.
-- **AG-UI stream**: Frontend chat → `POST /api/chat/{agent}` → agent `/runs/stream` directly. Gateway `/agents/{name}/run` is for scheduled runs and workflow monitoring (currently being fixed — see docs/issues.md C-01).
-- **docs/issues.md is the living issue tracker**: Update it when bugs are fixed or new issues are found. This file is studied by Claude to maintain context across sessions.
+- **AG-UI stream**: Frontend chat → `POST /api/chat/{agent}` (Next.js proxy) → `POST /agents/{name}/run` (gateway) → agent `/runs/stream` (LangGraph). The gateway translates LangGraph SSE → AG-UI events.
+- **docs/issues.md is the living issue tracker**: Update it when bugs are fixed or new issues are found.
+- **docs/dev-notes/active-state.md is the session handoff doc**: Update it at the end of any significant work session with what changed, what's next, and any active decisions made.
 - **`make install` uses `$(PYTHON) -m pip`**: This ensures deps install to the correct Python 3.13 venv, not system Python.
 - **`--no-browser` on langgraph dev**: LangSmith Studio opens via `http://localhost:{port}` not `0.0.0.0`. Always use `--no-browser` in Makefile targets.
+- **Auth is Supabase (email OTP)**: Backend requires `SUPABASE_URL`, `SUPABASE_JWT_SECRET`, `DATABASE_URL` (Postgres). Frontend requires `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. See `.env.example`.
+- **DB is Postgres, not SQLite**: `backend/db_postgres.py` replaces `backend/db.py`. All queries use asyncpg with a module-level pool (`_pool`). The pool is set during FastAPI lifespan — never import db.py for new code.
+- **All SQL in `backend/sql/`**: Named query files parsed by `backend/sql_loader.py`. No inline SQL in `api_server.py` or `db_postgres.py`.
+- **Multi-tenant: all queries scope by tenant_id**: JWT verified in `backend/auth_middleware.py`; `tenant_id` extracted and attached to `request.state`. Every DB function in `db_postgres.py` requires `tenant_id` as first arg.
+- **Thread IDs are namespaced**: Format is `thread-{tenant_id}-{agent}-{uuid4}`. The API validates the prefix on history fetch — never generate bare thread IDs.
+- **APScheduler uses module-level `_pool`**: Scheduler jobs can't use `request.state`. `trigger_agent_run` and `_reload_schedules` use `_pool` directly — don't refactor to use request context.
+- **CORS preflight skips auth**: The `_auth` HTTP middleware in `api_server.py` skips `OPTIONS` requests. This is intentional — never add auth checks to OPTIONS.
+- **Models via `backend/models.py`**: Agents should import `gemini_flash_model` or `free_nvidia_model` from `models.py` instead of instantiating LLM clients directly. `free_nvidia_model` needs its model ID updated — `nvidia/llama-nemotron-embed-vl-1b-v2:free` is an embedding model; use `nvidia/llama-3.1-nemotron-70b-instruct:free` for a free chat LLM.
 
 ---
 
