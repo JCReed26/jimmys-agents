@@ -6,7 +6,7 @@ AG-UI compliant gateway for LangGraph agent processes.
 - Strict AG-UI: POST /agents/{name}/run → SSE stream response
 - Per-agent rate limiting via slowapi
 - Circuit breaker: 3 failures → OPEN for 60s → 503 fast-fail
-- JWT auth via Supabase — tenant_id extracted from token, all queries tenant-scoped
+- JWT auth via Supabase — user_id extracted from token, single-user instance
 """
 from __future__ import annotations
 
@@ -60,7 +60,6 @@ _pool: asyncpg.Pool | None = None
 
 
 async def trigger_agent_run(
-    tenant_id: str,
     agent: str,
     task_prompt: str | None = None,
     thread_id: str | None = None,
@@ -73,16 +72,16 @@ async def trigger_agent_run(
     run_id = str(uuid.uuid4())
 
     async with _pool.acquire() as conn:
-        await db.start_run(conn, tenant_id, agent, run_id)
+        await db.start_run(conn, agent, run_id)
 
     agent_cfg = registry.get(agent)
     if not agent_cfg or not agent_cfg.enabled:
         async with _pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "error", error_msg="Agent not registered or disabled")
+            await db.finish_run(conn, run_id, "error", error_msg="Agent not registered or disabled")
         return
 
     if thread_id is None:
-        thread_id = db.make_thread_id(tenant_id, agent)
+        thread_id = db.make_thread_id(agent)
 
     prompt = task_prompt or "Run your scheduled task."
     lg_payload = {
@@ -93,7 +92,7 @@ async def trigger_agent_run(
     }
 
     translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
-    _publish_live(tenant_id, agent, translator.start())
+    _publish_live(agent, translator.start())
 
     try:
         async with httpx.AsyncClient(timeout=300) as client:
@@ -116,25 +115,25 @@ async def trigger_agent_run(
                         except json.JSONDecodeError:
                             continue
                         for ag_ui_line in translator.feed(current_event_type, data):
-                            _publish_live(tenant_id, agent, ag_ui_line)
+                            _publish_live(agent, ag_ui_line)
 
         for ag_ui_line in translator.finish():
-            _publish_live(tenant_id, agent, ag_ui_line)
+            _publish_live(agent, ag_ui_line)
 
         usage = translator.usage_metadata or {}
         token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         cost_usd = _estimate_cost(token_count)
         async with _pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
+            await db.finish_run(conn, run_id, "done", token_count=token_count, cost_usd=cost_usd)
             await db.create_hotl_log(
-                conn, tenant_id, agent, run_id, translator.hotl_summary,
+                conn, agent, run_id, translator.hotl_summary,
                 cost_usd=cost_usd, total_tokens=token_count,
             )
 
     except Exception as e:
         async with _pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
-        _publish_live(tenant_id, agent, translator.error(str(e)))
+            await db.finish_run(conn, run_id, "error", error_msg=str(e))
+        _publish_live(agent, translator.error(str(e)))
 
 
 async def _reload_schedules():
@@ -151,7 +150,7 @@ async def _reload_schedules():
     # M-07: one connection for the whole batch of UPDATE writes
     async with _pool.acquire() as conn:
         for row in rows:
-            job_id = f"agent_{row['tenant_id']}_{row['agent']}_{row['name']}"
+            job_id = f"agent_{row['agent']}_{row['name']}"
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
             if row["enabled"]:
@@ -162,7 +161,6 @@ async def _reload_schedules():
                         trigger=trigger,
                         id=job_id,
                         kwargs={
-                            "tenant_id": row["tenant_id"],
                             "agent": row["agent"],
                             "task_prompt": row.get("task_prompt"),
                             "thread_id": row.get("thread_id"),
@@ -178,7 +176,7 @@ async def _reload_schedules():
             # Reflect the enabled state back to DB so the toggle is consistent
             await conn.execute(
                 _SCHED_SQL["set_enabled"],
-                row["enabled"], row["tenant_id"], row["agent"], row["name"],
+                row["enabled"], row["agent"], row["name"],
             )
 
 
@@ -253,13 +251,7 @@ def health():
 
 @app.get("/me")
 async def get_me(request: Request):
-    async with request.app.state.pool.acquire() as conn:
-        tenant_name = await db.get_tenant_name(conn, request.state.tenant_id)
-    return {
-        "tenant_id": request.state.tenant_id,
-        "user_id": request.state.user_id,
-        "tenant_name": tenant_name,
-    }
+    return {"user_id": request.state.user_id}
 
 
 # ─────────────────────────────────────────
@@ -269,7 +261,7 @@ async def get_me(request: Request):
 @app.get("/nav-counts")
 async def nav_counts(request: Request):
     async with request.app.state.pool.acquire() as conn:
-        return await db.get_nav_counts(conn, request.state.tenant_id)
+        return await db.get_nav_counts(conn)
 
 
 # ─────────────────────────────────────────
@@ -278,8 +270,7 @@ async def nav_counts(request: Request):
 
 @app.post("/registry/reload")
 async def reload_registry(request: Request):
-    """Hot-reload agents.yaml without restarting the server. Admin only."""
-    _require_admin(request)
+    """Hot-reload agents.yaml without restarting the server."""
     registry.reload()
     await _reload_schedules()
     return {
@@ -290,19 +281,17 @@ async def reload_registry(request: Request):
 
 @app.get("/agents")
 async def agents_status(request: Request):
-    """List tenant's provisioned agents with live health + circuit breaker status."""
-    tenant_id = request.state.tenant_id
-
+    """List all active agents with live health + circuit breaker status."""
     async with request.app.state.pool.acquire() as conn:
-        tenant_agents = await db.list_tenant_agents(conn, tenant_id)
-        schedules = await db.list_schedules(conn, tenant_id)
-        hitl_pending = await db.list_hitl_items(conn, tenant_id, status="pending")
-        runs = await db.list_recent_runs(conn, tenant_id)
+        active_agents = await db.list_active_agents(conn)
+        schedules = await db.list_schedules(conn)
+        hitl_pending = await db.list_hitl_items(conn, status="pending")
+        runs = await db.list_recent_runs(conn)
 
     results: dict[str, dict] = {}
 
     async with httpx.AsyncClient(timeout=2) as client:
-        for agent in tenant_agents:
+        for agent in active_agents:
             entry: dict[str, Any] = {
                 "enabled": agent["status"] == "active",
                 "port": agent["port"],
@@ -355,7 +344,7 @@ async def agents_status(request: Request):
 # AG-UI run endpoint (POST → SSE stream)
 # ─────────────────────────────────────────
 
-async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> AsyncIterator[str]:
+async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     """
     Call {agent_url}/runs/stream (LangGraph native SSE),
     translate to AG-UI events, stream to browser.
@@ -365,7 +354,7 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
     pool = request.app.state.pool
 
     async with pool.acquire() as conn:
-        await db.start_run(conn, tenant_id, agent_name, run_id)
+        await db.start_run(conn, agent_name, run_id)
 
     try:
         body_bytes = await request.body()
@@ -373,7 +362,7 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
     except Exception:
         req_data = {}
 
-    thread_id = req_data.get("thread_id") or db.make_thread_id(tenant_id, agent_name)
+    thread_id = req_data.get("thread_id") or db.make_thread_id(agent_name)
     messages = req_data.get("messages", [])
 
     lg_payload = {
@@ -420,9 +409,9 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
         token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         cost_usd = _estimate_cost(token_count)
         async with pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "done", token_count=token_count, cost_usd=cost_usd)
+            await db.finish_run(conn, run_id, "done", token_count=token_count, cost_usd=cost_usd)
             await db.create_hotl_log(
-                conn, tenant_id, agent_name, run_id, translator.hotl_summary,
+                conn, agent_name, run_id, translator.hotl_summary,
                 cost_usd=cost_usd, total_tokens=token_count,
             )
         _run_finished = True
@@ -430,14 +419,14 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
         async with pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
+            await db.finish_run(conn, run_id, "error", error_msg=str(e))
         _run_finished = True
         yield translator.error(f"Agent returned HTTP {e.response.status_code}")
 
     except Exception as e:
         registry.record_failure(agent_name)
         async with pool.acquire() as conn:
-            await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
+            await db.finish_run(conn, run_id, "error", error_msg=str(e))
         _run_finished = True
         yield translator.error(str(e))
 
@@ -446,7 +435,7 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
             # Generator was abandoned mid-stream (client disconnected before completion)
             try:
                 async with pool.acquire() as conn:
-                    await db.finish_run(conn, tenant_id, run_id, "interrupted")
+                    await db.finish_run(conn, run_id, "interrupted")
             except Exception:
                 pass
 
@@ -469,7 +458,7 @@ async def agent_run(name: str, request: Request):
     await _check_rate_limit(name, limit_str, request)
 
     return StreamingResponse(
-        _proxy_sse(name, request.state.tenant_id, request),
+        _proxy_sse(name, request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -486,7 +475,7 @@ async def sse_live(agent: str, request: Request):
     Stays open, sends heartbeat comments every 15s to keep connection alive.
     Scoped to requesting tenant — cannot receive another tenant's run events.
     """
-    q = _get_live_queue(request.state.tenant_id, agent)
+    q = _get_live_queue(agent)
 
     async def event_stream():
         while True:
@@ -510,8 +499,7 @@ async def chat_history(agent: str, thread_id: str, request: Request):
     Validates thread_id belongs to requesting tenant before proxying.
     Returns {"messages": []} if agent is down, thread not found, or tenant mismatch.
     """
-    tenant_id = request.state.tenant_id
-    if not thread_id.startswith(f"thread-{tenant_id}-"):
+    if not thread_id.startswith(f"thread-{agent}-"):
         return {"messages": []}
 
     agent_cfg = registry.get(agent)
@@ -543,16 +531,15 @@ _rate_buckets: dict[str, dict[str, list[float]]] = {}
 _live_queues: dict[str, asyncio.Queue] = {}
 
 
-def _get_live_queue(tenant_id: str, agent: str) -> asyncio.Queue:
-    key = f"{tenant_id}:{agent}"
-    if key not in _live_queues:
-        _live_queues[key] = asyncio.Queue(maxsize=500)
-    return _live_queues[key]
+def _get_live_queue(agent: str) -> asyncio.Queue:
+    if agent not in _live_queues:
+        _live_queues[agent] = asyncio.Queue(maxsize=500)
+    return _live_queues[agent]
 
 
-def _publish_live(tenant_id: str, agent: str, event_line: str) -> None:
-    """Non-blocking put to tenant-scoped live queue. Silently drops if full."""
-    q = _get_live_queue(tenant_id, agent)
+def _publish_live(agent: str, event_line: str) -> None:
+    """Non-blocking put to live queue. Silently drops if full."""
+    q = _get_live_queue(agent)
     try:
         q.put_nowait(event_line)
     except asyncio.QueueFull:
@@ -611,20 +598,20 @@ class HitlResolveRequest(BaseModel):
 @app.get("/hitl")
 async def list_hitl(request: Request, status: str | None = None, agent: str | None = None):
     async with request.app.state.pool.acquire() as conn:
-        return await db.list_hitl_items(conn, request.state.tenant_id, status=status, agent=agent)
+        return await db.list_hitl_items(conn, status=status, agent=agent)
 
 
 @app.post("/hitl")
 async def create_hitl(req: HitlCreateRequest, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        item = await db.create_hitl_item(conn, request.state.tenant_id, req.agent, req.item_type, req.payload)
+        item = await db.create_hitl_item(conn, req.agent, req.item_type, req.payload)
     return {"id": str(item["id"])}
 
 
 @app.get("/hitl/{item_id}")
 async def get_hitl(item_id: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        item = await db.get_hitl_item(conn, request.state.tenant_id, item_id)
+        item = await db.get_hitl_item(conn, item_id)
     if not item:
         raise HTTPException(404, "Not found")
     return item
@@ -633,7 +620,7 @@ async def get_hitl(item_id: str, request: Request):
 @app.post("/hitl/{item_id}/resolve")
 async def resolve_hitl(item_id: str, req: HitlResolveRequest, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        result = await db.resolve_hitl_item(conn, request.state.tenant_id, item_id, req.decision, req.comment)
+        result = await db.resolve_hitl_item(conn, item_id, req.decision, req.comment)
     if not result:
         raise HTTPException(404, "Item not found or already resolved")
     return {"ok": True}
@@ -642,9 +629,6 @@ async def resolve_hitl(item_id: str, req: HitlResolveRequest, request: Request):
 # ─────────────────────────────────────────
 # HOTL
 # ─────────────────────────────────────────
-
-JAMES_TENANT_ID = os.getenv("ADMIN_TENANT_ID", "4efdeb00-1b23-4031-bc77-555af005a406")
-
 
 class HotlCreateRequest(BaseModel):
     # agent_name is the canonical field agents send; agent is accepted as an alias
@@ -666,22 +650,13 @@ class HotlCreateRequest(BaseModel):
 @app.get("/hotl")
 async def list_hotl(request: Request, agent: str | None = None, unread_only: bool = False):
     async with request.app.state.pool.acquire() as conn:
-        return await db.list_hotl_logs(conn, request.state.tenant_id, agent=agent, unread_only=unread_only)
+        return await db.list_hotl_logs(conn, agent=agent, unread_only=unread_only)
 
 
 @app.post("/hotl")
 async def create_hotl(req: HotlCreateRequest, request: Request):
-    # Resolve agent name — accept both agent_name (from agent code) and agent (from gateway)
     agent_name = req.agent_name or req.agent or "unknown"
 
-    # When called via internal key, look up the real tenant_id from tenant_agents table
-    tenant_id = request.state.tenant_id
-    if tenant_id == "internal":
-        async with request.app.state.pool.acquire() as conn:
-            resolved = await db.get_tenant_id_for_agent(conn, agent_name)
-        tenant_id = resolved or JAMES_TENANT_ID
-
-    # Build summary: prefer explicit summary dict, otherwise build from flat fields
     if req.summary is not None:
         summary = req.summary
     else:
@@ -694,7 +669,6 @@ async def create_hotl(req: HotlCreateRequest, request: Request):
     async with request.app.state.pool.acquire() as conn:
         log = await db.create_hotl_log(
             conn,
-            tenant_id,
             agent_name,
             req.run_id or str(uuid.uuid4()),
             summary,
@@ -707,23 +681,23 @@ async def create_hotl(req: HotlCreateRequest, request: Request):
 
 @app.post("/hotl/clear")
 async def clear_hotl(request: Request):
-    """Permanently delete all HOTL logs for this tenant. Destructive — confirm in UI before calling."""
+    """Permanently delete all HOTL logs. Destructive — confirm in UI before calling."""
     async with request.app.state.pool.acquire() as conn:
-        await db.clear_hotl_logs(conn, request.state.tenant_id)
+        await db.clear_hotl_logs(conn)
     return {"ok": True}
 
 
 @app.post("/hotl/read-all")
 async def mark_all_hotl_read(request: Request, agent: str | None = None):
     async with request.app.state.pool.acquire() as conn:
-        await db.mark_all_hotl_read(conn, request.state.tenant_id, agent=agent)
+        await db.mark_all_hotl_read(conn, agent=agent)
     return {"ok": True}
 
 
 @app.post("/hotl/{log_id}/read")
 async def mark_hotl_read(log_id: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        await db.mark_hotl_read(conn, request.state.tenant_id, log_id)
+        await db.mark_hotl_read(conn, log_id)
     return {"ok": True}
 
 
@@ -741,14 +715,14 @@ async def list_runs(request: Request, agent: str | None = None, limit: int = 20)
     limit = min(limit, 100)
     async with request.app.state.pool.acquire() as conn:
         if agent:
-            return await db.list_runs_for_agent(conn, request.state.tenant_id, agent, limit=limit)
-        return await db.list_runs(conn, request.state.tenant_id, limit=limit)
+            return await db.list_runs_for_agent(conn, agent, limit=limit)
+        return await db.list_runs(conn, limit=limit)
 
 
 @app.post("/runs/start")
 async def start_run_endpoint(agent: str, run_id: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        await db.start_run(conn, request.state.tenant_id, agent, run_id)
+        await db.start_run(conn, agent, run_id)
     return {"ok": True}
 
 
@@ -762,7 +736,7 @@ class RunFinishRequest(BaseModel):
 @app.post("/runs/{run_id}/finish")
 async def finish_run_endpoint(run_id: str, req: RunFinishRequest, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        await db.finish_run(conn, request.state.tenant_id, run_id, req.status, req.token_count, req.cost_usd, req.error_msg)
+        await db.finish_run(conn, run_id, req.status, req.token_count, req.cost_usd, req.error_msg)
     return {"ok": True}
 
 
@@ -780,14 +754,13 @@ class ScheduleUpsertRequest(BaseModel):
 @app.get("/schedules")
 async def list_schedules_endpoint(request: Request):
     async with request.app.state.pool.acquire() as conn:
-        return await db.list_schedules(conn, request.state.tenant_id)
+        return await db.list_schedules(conn)
 
 @app.post("/schedules")
 async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request):
     async with request.app.state.pool.acquire() as conn:
         await db.upsert_schedule(
             conn,
-            request.state.tenant_id,
             req.agent,
             req.name,
             req.cron_expr,
@@ -800,7 +773,7 @@ async def upsert_schedule_endpoint(req: ScheduleUpsertRequest, request: Request)
 @app.delete("/schedules/{agent}/{name}")
 async def delete_schedule_endpoint(agent: str, name: str, request: Request):
     async with request.app.state.pool.acquire() as conn:
-        await db.delete_schedule(conn, request.state.tenant_id, agent, name)
+        await db.delete_schedule(conn, agent, name)
     await _reload_schedules()
     return {"ok": True}
 
@@ -808,13 +781,12 @@ async def delete_schedule_endpoint(agent: str, name: str, request: Request):
 @app.post("/schedules/{agent}/trigger")
 async def manual_trigger(agent: str, request: Request, name: str = "default"):
     """Manually fire an agent run outside its schedule."""
-    tenant_id = request.state.tenant_id
     async with request.app.state.pool.acquire() as conn:
-        rows = await db.list_schedules(conn, tenant_id, agent=agent)
+        rows = await db.list_schedules(conn, agent=agent)
     sched = next((r for r in rows if r["name"] == name), None)
     prompt = sched["task_prompt"] if sched else None
     thread_id = str(sched["thread_id"]) if sched and sched.get("thread_id") else None
-    asyncio.create_task(trigger_agent_run(tenant_id, agent, prompt, thread_id))
+    asyncio.create_task(trigger_agent_run(agent, prompt, thread_id))
     return {"ok": True, "message": f"Triggered {agent}/{name}"}
 
 
@@ -825,22 +797,11 @@ async def manual_trigger(agent: str, request: Request, name: str = "default"):
 _PROJECT_ROOT = Path(__file__).parent.parent
 
 
-async def _check_agent_access(name: str, request: Request) -> None:
-    """Raise 403 if the requesting tenant does not have access to the named agent."""
-    if request.state.tenant_id == JAMES_TENANT_ID:
-        return  # admin always has access
-    async with request.app.state.pool.acquire() as conn:
-        tenant_agents = await db.list_tenant_agents(conn, request.state.tenant_id)
-    if not any(a["name"] == name for a in tenant_agents):
-        raise HTTPException(status_code=403, detail=f"Tenant does not have access to agent '{name}'")
-
-
 @app.get("/agents/{name}/agents-md")
 async def get_agents_md(name: str, request: Request):
     agent_cfg = registry.get(name)
     if not agent_cfg:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    await _check_agent_access(name, request)
     path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
     if not path.exists():
         return {"content": ""}
@@ -852,7 +813,6 @@ async def put_agents_md(name: str, request: Request):
     agent_cfg = registry.get(name)
     if not agent_cfg:
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
-    await _check_agent_access(name, request)
     body = await request.json()
     content = body.get("content", "")
     path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
@@ -868,7 +828,7 @@ async def put_agents_md(name: str, request: Request):
 @app.get("/stats")
 async def get_stats(request: Request):
     async with request.app.state.pool.acquire() as conn:
-        return await db.get_stats(conn, request.state.tenant_id)
+        return await db.get_stats(conn)
 
 
 # ─────────────────────────────────────────
@@ -883,10 +843,10 @@ async def global_search(q: str, request: Request):
     results: list[dict] = []
 
     async with request.app.state.pool.acquire() as conn:
-        hotl_logs = await db.list_hotl_logs(conn, request.state.tenant_id, limit=200)
-        hitl_items = await db.list_hitl_items(conn, request.state.tenant_id)
-        memory_rows = await db.search_agent_memory(conn, request.state.tenant_id)
-        rules_rows = await db.search_agent_rules(conn, request.state.tenant_id)
+        hotl_logs = await db.list_hotl_logs(conn, limit=200)
+        hitl_items = await db.list_hitl_items(conn)
+        memory_rows = await db.search_agent_memory(conn)
+        rules_rows = await db.search_agent_rules(conn)
 
     for log in hotl_logs:
         s = log["summary"]
@@ -939,109 +899,6 @@ async def global_search(q: str, request: Request):
             })
 
     return {"results": results[:50]}
-
-
-# ─────────────────────────────────────────
-# Admin (superadmin only — James's tenant)
-# ─────────────────────────────────────────
-
-def serialize(row) -> dict:
-    """Convert an asyncpg Record to a plain dict for JSON serialization."""
-    return dict(row)
-
-
-def _require_admin(request: Request):
-    if request.state.tenant_id != JAMES_TENANT_ID:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-
-@app.get("/admin/tenants")
-async def admin_list_tenants(request: Request):
-    _require_admin(request)
-    async with request.app.state.pool.acquire() as conn:
-        tenants = await db.list_tenants(conn)
-    return {"tenants": [serialize(t) for t in tenants]}
-
-
-@app.post("/admin/tenants")
-async def admin_create_tenant(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    name = (body.get("name") or "").strip()
-    if not name:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="name is required")
-    async with request.app.state.pool.acquire() as conn:
-        tenant = await db.create_tenant(conn, name)
-    return serialize(tenant)
-
-
-@app.get("/admin/agents")
-async def admin_list_registry(request: Request):
-    _require_admin(request)
-    async with request.app.state.pool.acquire() as conn:
-        agents = await db.list_agent_registry(conn)
-    return {"agents": [serialize(a) for a in agents]}
-
-
-@app.post("/admin/tenant-agents")
-async def admin_assign_agent(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    tenant_id = body.get("tenant_id", "").strip()
-    agent_name = body.get("agent_name", "").strip()
-    if not tenant_id or not agent_name:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="tenant_id and agent_name required")
-    async with request.app.state.pool.acquire() as conn:
-        row = await db.assign_agent_to_tenant(conn, tenant_id, agent_name)
-    return serialize(row)
-
-
-@app.delete("/admin/tenant-agents")
-async def admin_remove_agent(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    tenant_id = body.get("tenant_id", "").strip()
-    agent_name = body.get("agent_name", "").strip()
-    async with request.app.state.pool.acquire() as conn:
-        await db.remove_agent_from_tenant(conn, tenant_id, agent_name)
-    return {"ok": True}
-
-
-@app.get("/admin/users")
-async def admin_list_users(request: Request):
-    _require_admin(request)
-    tenant_id = request.query_params.get("tenant_id") or JAMES_TENANT_ID
-    async with request.app.state.pool.acquire() as conn:
-        users = await db.list_tenant_users(conn, tenant_id)
-    return {"users": [serialize(u) for u in users]}
-
-
-@app.post("/admin/users")
-async def admin_add_user(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    user_id = body.get("user_id", "").strip()
-    tenant_id = body.get("tenant_id", "").strip()
-    if not user_id or not tenant_id:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="user_id and tenant_id required")
-    async with request.app.state.pool.acquire() as conn:
-        await db.add_user_to_tenant(conn, user_id, tenant_id)
-    return {"ok": True}
-
-
-@app.delete("/admin/users")
-async def admin_remove_user(request: Request):
-    _require_admin(request)
-    body = await request.json()
-    user_id = body.get("user_id", "").strip()
-    tenant_id = body.get("tenant_id", "").strip()
-    async with request.app.state.pool.acquire() as conn:
-        await db.remove_user_from_tenant(conn, user_id, tenant_id)
-    return {"ok": True}
 
 
 if __name__ == "__main__":
