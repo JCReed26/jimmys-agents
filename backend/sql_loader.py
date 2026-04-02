@@ -10,7 +10,7 @@ Files in backend/sql/*.sql use named query blocks:
 Usage:
     from backend.sql_loader import load_sql
     Q = load_sql("hotl")
-    rows = await conn.fetch(Q["list_hotl_logs"], tenant_id)
+    rows = await conn.fetch(Q["list_hotl_logs"])
 """
 import re
 from pathlib import Path

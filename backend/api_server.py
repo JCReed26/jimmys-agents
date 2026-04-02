@@ -137,7 +137,7 @@ async def trigger_agent_run(
 
 
 async def _reload_schedules():
-    """Sync APScheduler with the schedules table (all tenants)."""
+    """Sync APScheduler with the schedules table."""
     global _pool
     if _pool is None:
         return
