@@ -8,12 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Shield, Building2, Bot, Users, Plus, Trash2, Loader2 } from "lucide-react";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 
 interface Tenant { id: string; name: string; is_active: boolean; created_at: string }
 interface AgentReg { id: string; name: string; display_name: string; port: number; accent_color: string }
 interface TenantUser { id: string; email: string; tenant_id: string }
 
-const JAMES_TENANT = "4efdeb00-1b23-4031-bc77-555af005a406";
+const JAMES_TENANT = process.env.NEXT_PUBLIC_ADMIN_TENANT_ID ?? "4efdeb00-1b23-4031-bc77-555af005a406";
 
 export default function AdminPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
@@ -112,6 +113,7 @@ export default function AdminPage() {
   }
 
   return (
+    <ErrorBoundary>
     <div className="space-y-6 max-w-4xl">
       {/* Header */}
       <div className="flex items-center gap-3">
@@ -276,5 +278,6 @@ export default function AdminPage() {
         </TabsContent>
       </Tabs>
     </div>
+    </ErrorBoundary>
   );
 }

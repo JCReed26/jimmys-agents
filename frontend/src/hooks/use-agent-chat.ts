@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 export interface Message {
   id: string;
@@ -70,11 +70,21 @@ export function useAgentChat(agentName: string) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runStatus, setRunStatus] = useState<'idle' | 'running' | 'error'>('idle');
-  
+
   // Thread management
   const [threads, setThreads] = useState<Thread[]>([]);
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [isInitializing, setIsInitializing] = useState(true);
+
+  // Stale-load cancellation: each history fetch gets a unique symbol
+  const loadIdRef = useRef<symbol | null>(null);
+  // In-flight chat request cancellation
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Cancel any in-flight chat request on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   // Initialize threads on mount
   useEffect(() => {
@@ -91,47 +101,53 @@ export function useAgentChat(agentName: string) {
     }
   }, [agentName]);
 
-  // Load history when thread changes
+  // Load history when thread changes — symbol-gated to drop stale responses
   useEffect(() => {
+    if (!currentThreadId) return;
+
+    const loadId = Symbol();
+    loadIdRef.current = loadId;
+    setIsInitializing(true);
+    setError(null);
+
     async function loadHistory() {
-      if (!currentThreadId) return;
-      
-      setIsInitializing(true);
-      setError(null);
-      
       try {
-        const response = await fetch(`/api/chat/${agentName}?thread_id=${encodeURIComponent(currentThreadId)}`);
+        const response = await fetch(`/api/chat/${agentName}?thread_id=${encodeURIComponent(currentThreadId!)}`);
+
+        // Drop result if a newer load started while we were awaiting
+        if (loadIdRef.current !== loadId) return;
+
         if (!response.ok) {
-           if (response.status !== 404) {
-             throw new Error(`Failed to load history: ${response.statusText}`);
-           }
-           setMessages([]); // Not found just means no history yet
-           return;
+          if (response.status !== 404) {
+            throw new Error(`Failed to load history: ${response.statusText}`);
+          }
+          setMessages([]);
+          return;
         }
-        
+
         const data = await response.json();
-        
+        if (loadIdRef.current !== loadId) return;
+
         if (data.messages && Array.isArray(data.messages)) {
-          const formattedMessages = data.messages.map((m: any, idx: number) => ({
+          const formattedMessages = data.messages.map((m: { id?: string; role?: string; content?: string }, idx: number) => ({
             id: m.id || `msg-${idx}`,
             role: m.role === 'user' ? 'human' : 'assistant',
             content: m.content || '',
-            // If we have tool calls/results in history, we'd format them here
-            // but for now just getting basic text content
           }));
           setMessages(formattedMessages);
         } else {
           setMessages([]);
         }
       } catch (err) {
+        if (loadIdRef.current !== loadId) return;
         console.error("Error loading history:", err);
         setError("Failed to load chat history");
-        setMessages([]); // Fallback to empty on error
+        setMessages([]);
       } finally {
-        setIsInitializing(false);
+        if (loadIdRef.current === loadId) setIsInitializing(false);
       }
     }
-    
+
     loadHistory();
   }, [agentName, currentThreadId]);
 
@@ -150,6 +166,11 @@ export function useAgentChat(agentName: string) {
 
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || !currentThreadId) return;
+
+    // Cancel any previously in-flight request
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMessage: Message = {
       id: `user-${crypto.randomUUID()}`,
@@ -178,6 +199,7 @@ export function useAgentChat(agentName: string) {
           thread_id: currentThreadId,
           messages: bodyMessages,
         }),
+        signal: controller.signal,
       });
 
       if (!response.ok) throw new Error(response.statusText);
@@ -290,6 +312,8 @@ export function useAgentChat(agentName: string) {
       }
 
     } catch (err: unknown) {
+      // Ignore abort errors — they're intentional (new message sent or unmount)
+      if (err instanceof Error && err.name === 'AbortError') return;
       const message = err instanceof Error ? err.message : 'An error occurred';
       setError(message);
       setRunStatus('error');

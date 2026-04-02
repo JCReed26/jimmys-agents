@@ -2,13 +2,15 @@ import os
 import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langchain_core.checkpoints import MemorySaver
-from deepagents.middleware import AgentMiddleware, SkillsMiddleware, MemoryMiddleware, FilesystemMiddleware
+from langgraph.checkpoint.memory import MemorySaver
+from deepagents.middleware import SkillsMiddleware, MemoryMiddleware, FilesystemMiddleware
+from deepagents import middle
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain_community.tools import DuckDuckGoSearchRun
 from pathlib import Path
 from langchain.tools import tool
+from langchain_google_community.sheets import SheetsToolkit
 
 import csv
 import io
@@ -49,7 +51,7 @@ The google sheet will have a tab for each csv file that you have. and when they 
 You are in development; if you need data, use your tools to fetch it.
 """
 
-class BudgetSyncMiddleware(AgentMiddleware):
+class BudgetSyncMiddleware():
     """Syncs Google Sheets ↔ CSV before/after each agent run and posts HOTL logs."""
 
     async def before_agent(self, state, runtime):

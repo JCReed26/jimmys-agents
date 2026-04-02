@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCheck, Inbox, Clock, AlertTriangle } from "lucide-react";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { cn } from "@/lib/utils";
 
 interface HitlItem {
@@ -79,6 +80,7 @@ export default function InboxPage() {
   ];
 
   return (
+    <ErrorBoundary>
     <div className="max-w-3xl mx-auto space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -175,6 +177,7 @@ export default function InboxPage() {
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }
 

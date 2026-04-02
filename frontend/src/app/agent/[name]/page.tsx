@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
+import { ErrorBoundary } from "@/components/ui/error-boundary";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -146,6 +147,7 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
   const Icon = cfg.icon;
 
   return (
+    <ErrorBoundary>
     <div className="flex h-[calc(100vh-3rem)] overflow-hidden -m-6">
       {/* ── Chat panel ── */}
       <div className="flex flex-col flex-1 min-w-0 border-r border-border">
@@ -351,6 +353,7 @@ export default function AgentPage({ params }: { params: Promise<{ name: string }
         </div>
       )}
     </div>
+    </ErrorBoundary>
   );
 }
 
@@ -444,12 +447,29 @@ function MemoryPanel({
   onChange: (s: string) => void;
   onSave: () => void;
 }) {
+  const isDirty = editing && draft !== content;
+
+  // Warn if the user tries to close/navigate away with unsaved changes
+  useEffect(() => {
+    if (!isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isDirty]);
+
   if (loading) return <Skeleton className="h-40 w-full" />;
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">AGENTS.md</p>
+        <div className="flex items-center gap-2">
+          <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wider">AGENTS.md</p>
+          {isDirty && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              unsaved
+            </span>
+          )}
+        </div>
         {!editing && (
           <Button variant="ghost" size="sm" className="h-6 text-[10px] px-2" onClick={onEdit}>
             Edit

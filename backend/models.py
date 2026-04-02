@@ -21,7 +21,13 @@ cheap_haiku_three_model = ChatOpenRouter(
     api_key=OPENROUTER_API_KEY,
 )
 
-free_nvidia_model = ChatOpenRouter(
-    model="nvidia/llama-3.1-nemotron-70b-instruct:free",
+free_qwen_threesixplus = ChatOpenRouter(
+    model="qwen/qwen3.6-plus-preview:free",
     api_key=OPENROUTER_API_KEY,
+)
+
+free_nvidia_nemotron = ChatOpenRouter(
+    model="nvidia/nemotron-3-super-120b-a12b:free",
+    api_key=OPENROUTER_API_KEY,
+
 )

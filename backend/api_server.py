@@ -32,8 +32,11 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+import logging
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+logger = logging.getLogger("jimmys-agents.gateway")
 
 from backend import db_postgres as db
 from backend.agent_registry import registry
@@ -166,8 +169,11 @@ async def _reload_schedules():
                         },
                         replace_existing=True,
                     )
-                except Exception:
-                    pass  # invalid cron — skip silently
+                except Exception as cron_err:
+                    logger.warning(
+                        "Invalid cron expression for %s/%s (%r) — schedule skipped: %s",
+                        row["agent"], row["name"], row["cron_expr"], cron_err
+                    )
 
             # Reflect the enabled state back to DB so the toggle is consistent
             await conn.execute(
@@ -272,7 +278,8 @@ async def nav_counts(request: Request):
 
 @app.post("/registry/reload")
 async def reload_registry(request: Request):
-    """Hot-reload agents.yaml without restarting the server."""
+    """Hot-reload agents.yaml without restarting the server. Admin only."""
+    _require_admin(request)
     registry.reload()
     await _reload_schedules()
     return {
@@ -379,6 +386,7 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
     translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
     yield translator.start()
 
+    _run_finished = False
     try:
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
@@ -417,18 +425,30 @@ async def _proxy_sse(agent_name: str, tenant_id: str, request: Request) -> Async
                 conn, tenant_id, agent_name, run_id, translator.hotl_summary,
                 cost_usd=cost_usd, total_tokens=token_count,
             )
+        _run_finished = True
 
     except httpx.HTTPStatusError as e:
         registry.record_failure(agent_name)
         async with pool.acquire() as conn:
             await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
+        _run_finished = True
         yield translator.error(f"Agent returned HTTP {e.response.status_code}")
 
     except Exception as e:
         registry.record_failure(agent_name)
         async with pool.acquire() as conn:
             await db.finish_run(conn, tenant_id, run_id, "error", error_msg=str(e))
+        _run_finished = True
         yield translator.error(str(e))
+
+    finally:
+        if not _run_finished:
+            # Generator was abandoned mid-stream (client disconnected before completion)
+            try:
+                async with pool.acquire() as conn:
+                    await db.finish_run(conn, tenant_id, run_id, "interrupted")
+            except Exception:
+                pass
 
 
 @app.post("/agents/{name}/run")
@@ -623,7 +643,7 @@ async def resolve_hitl(item_id: str, req: HitlResolveRequest, request: Request):
 # HOTL
 # ─────────────────────────────────────────
 
-JAMES_TENANT_ID = "4efdeb00-1b23-4031-bc77-555af005a406"
+JAMES_TENANT_ID = os.getenv("ADMIN_TENANT_ID", "4efdeb00-1b23-4031-bc77-555af005a406")
 
 
 class HotlCreateRequest(BaseModel):
@@ -805,12 +825,22 @@ async def manual_trigger(agent: str, request: Request, name: str = "default"):
 _PROJECT_ROOT = Path(__file__).parent.parent
 
 
+async def _check_agent_access(name: str, request: Request) -> None:
+    """Raise 403 if the requesting tenant does not have access to the named agent."""
+    if request.state.tenant_id == JAMES_TENANT_ID:
+        return  # admin always has access
+    async with request.app.state.pool.acquire() as conn:
+        tenant_agents = await db.list_tenant_agents(conn, request.state.tenant_id)
+    if not any(a["name"] == name for a in tenant_agents):
+        raise HTTPException(status_code=403, detail=f"Tenant does not have access to agent '{name}'")
+
+
 @app.get("/agents/{name}/agents-md")
 async def get_agents_md(name: str, request: Request):
     agent_cfg = registry.get(name)
     if not agent_cfg:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    await _check_agent_access(name, request)
     path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
     if not path.exists():
         return {"content": ""}
@@ -821,8 +851,8 @@ async def get_agents_md(name: str, request: Request):
 async def put_agents_md(name: str, request: Request):
     agent_cfg = registry.get(name)
     if not agent_cfg:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+    await _check_agent_access(name, request)
     body = await request.json()
     content = body.get("content", "")
     path = _PROJECT_ROOT / agent_cfg.dir / "skills" / "AGENTS.md"
@@ -914,6 +944,11 @@ async def global_search(q: str, request: Request):
 # ─────────────────────────────────────────
 # Admin (superadmin only — James's tenant)
 # ─────────────────────────────────────────
+
+def serialize(row) -> dict:
+    """Convert an asyncpg Record to a plain dict for JSON serialization."""
+    return dict(row)
+
 
 def _require_admin(request: Request):
     if request.state.tenant_id != JAMES_TENANT_ID:
