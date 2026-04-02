@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  MessageSquare, GitBranch, Activity, Clock, DollarSign,
+  MessageSquare, GitBranch, Activity, Clock,
   CheckCircle2, Circle, AlertCircle, Zap, RotateCw,
   ArrowRight, TrendingUp, Inbox,
 } from "lucide-react";
@@ -84,7 +84,6 @@ export default function DashboardPage() {
   const allStatuses = Object.values(agentData);
   const runningCount = allStatuses.filter((s) => s.status === "RUNNING").length;
   const hitlTotal = allStatuses.reduce((n, s) => n + (s.hitlCount ?? 0), 0);
-  const costToday = stats ? Object.values(stats.by_agent).reduce((n, a) => n + (a.cost ?? 0), 0) : 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -111,13 +110,6 @@ export default function DashboardPage() {
           icon={<Inbox className="h-4 w-4" />}
           loading={loading}
           accent={hitlTotal > 0 ? "text-destructive" : undefined}
-        />
-        <StatCard
-          label="Cost Today"
-          value={`$${costToday.toFixed(2)}`}
-          sub={`${stats?.total_tokens ?? 0} tokens`}
-          icon={<DollarSign className="h-4 w-4" />}
-          loading={loading}
         />
       </div>
 

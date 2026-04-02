@@ -7,14 +7,13 @@ import {
   Mail, Calendar, DollarSign, GitBranch,
   LayoutDashboard, Inbox, ScrollText, Activity,
   CalendarClock, Settings, User, ChevronRight,
-  Zap, BarChart3, PanelLeft, LogOut, Shield,
+  Zap, BarChart3, PanelLeft, LogOut,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SidebarProvider,
   Sidebar,
@@ -49,9 +48,7 @@ const agentLinks = [
 ];
 
 const systemLinks = [
-  { href: "/profile",   label: "Profile",  icon: User },
   { href: "/settings",  label: "Settings", icon: Settings },
-  { href: "/admin",     label: "Admin",    icon: Shield },
 ];
 
 // ─── Layout shell ─────────────────────────────────────────────────
@@ -60,7 +57,6 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [counts, setCounts] = useState<NavCounts>({ hitl: 0, hotlUnread: 0 });
-  const [tenantName, setTenantName] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchCounts() {
@@ -69,17 +65,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
         if (r.ok) setCounts(await r.json());
       } catch { /* silently ignore */ }
     }
-    async function fetchMe() {
-      try {
-        const r = await fetch("/api/me", { cache: "no-store" });
-        if (r.ok) {
-          const data = await r.json();
-          setTenantName(data.tenant_name ?? null);
-        }
-      } catch { /* silently ignore */ }
-    }
     fetchCounts();
-    fetchMe();
     const iv = setInterval(fetchCounts, 15000);
     return () => clearInterval(iv);
   }, []);
@@ -113,11 +99,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-[var(--agent-calendar)]" />
             <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
-              {tenantName ? (
-                tenantName.length > 20 ? `${tenantName.substring(0, 17)}...` : tenantName
-              ) : (
-                <Skeleton className="h-4 w-24 inline-block" />
-              )}
+              Jimmy's Agents
             </span>
           </Link>
         </SidebarHeader>
@@ -181,7 +163,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <User className="h-3 w-3 text-muted-foreground" />
               </div>
               <span className="text-xs text-muted-foreground truncate">
-                {tenantName ?? "…"}
+                Jimmy's Agents
               </span>
             </div>
             <Button

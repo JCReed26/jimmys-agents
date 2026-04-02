@@ -13,5 +13,5 @@ export async function GET() {
     });
     if (r.ok) return NextResponse.json(await r.json());
   } catch { /* ignore */ }
-  return NextResponse.json({ tenant_id: null, user_id: null, tenant_name: null });
+  return NextResponse.json({ user_id: null });
 }
