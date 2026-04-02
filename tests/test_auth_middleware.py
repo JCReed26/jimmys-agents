@@ -6,7 +6,6 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 TEST_JWT_SECRET = "test-secret-32-chars-exactly-ok!"
-TEST_TENANT_ID = "11111111-1111-1111-1111-111111111111"
 TEST_USER_ID   = "22222222-2222-2222-2222-222222222222"
 TEST_SUPABASE_URL = "https://test.supabase.co"
 TEST_ISSUER = f"{TEST_SUPABASE_URL}/auth/v1"
@@ -19,21 +18,12 @@ def make_token(user_id=TEST_USER_ID, secret=TEST_JWT_SECRET, expired=False):
         algorithm="HS256",
     )
 
-def make_app(monkeypatch, tenant_row={"tenant_id": TEST_TENANT_ID}):
+def make_app(monkeypatch):
     monkeypatch.setenv("SUPABASE_JWT_SECRET", TEST_JWT_SECRET)
     monkeypatch.setenv("SUPABASE_URL", TEST_SUPABASE_URL)
 
-    mock_conn = AsyncMock()
-    mock_conn.fetchrow = AsyncMock(return_value=tenant_row)
-    mock_pool = MagicMock()
-    mock_pool.acquire = MagicMock(return_value=AsyncMock(
-        __aenter__=AsyncMock(return_value=mock_conn),
-        __aexit__=AsyncMock(return_value=None),
-    ))
-
     from backend.auth_middleware import auth_middleware
     app = FastAPI()
-    app.state.pool = mock_pool
     app.middleware("http")(auth_middleware)
 
     @app.get("/ok")
@@ -42,7 +32,7 @@ def make_app(monkeypatch, tenant_row={"tenant_id": TEST_TENANT_ID}):
 
     @app.get("/protected")
     async def protected(request: Request):
-        return {"tenant_id": request.state.tenant_id, "user_id": request.state.user_id}
+        return {"user_id": request.state.user_id}
 
     return app
 
@@ -84,21 +74,13 @@ def test_wrong_secret_returns_401(monkeypatch):
     resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
 
-def test_valid_token_attaches_tenant_and_user(monkeypatch):
+def test_valid_token_attaches_user_id(monkeypatch):
     app = make_app(monkeypatch)
     client = TestClient(app, raise_server_exceptions=False)
     token = make_token()
     resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert resp.json()["tenant_id"] == TEST_TENANT_ID
     assert resp.json()["user_id"] == TEST_USER_ID
-
-def test_no_tenant_returns_403(monkeypatch):
-    app = make_app(monkeypatch, tenant_row=None)
-    client = TestClient(app, raise_server_exceptions=False)
-    token = make_token()
-    resp = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
-    assert resp.status_code == 403
 
 def test_wrong_issuer_returns_401(monkeypatch):
     """Token signed with correct secret but from a different Supabase project must be rejected."""

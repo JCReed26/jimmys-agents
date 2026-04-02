@@ -2,16 +2,14 @@
 Tests for:
   - POST /hotl with valid X-Internal-Key returns 200
   - POST /hotl with invalid X-Internal-Key returns 401
-  - POST /hotl/clear deletes entries for correct tenant
-  - GET /chat/{agent}/history with wrong-tenant thread_id returns empty messages
+  - POST /hotl/clear deletes all entries (no tenant scoping)
+  - GET /chat/{agent}/history with wrong-agent thread_id returns empty messages
 """
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-TENANT_ID = "11111111-1111-1111-1111-111111111111"
-OTHER_TENANT = "22222222-2222-2222-2222-222222222222"
 VALID_INTERNAL_KEY = "test-internal-key-abc123"
 
 
@@ -49,11 +47,11 @@ def make_hotl_app(monkeypatch, internal_key: str = VALID_INTERNAL_KEY, conn: Asy
 
     @app.post("/hotl")
     async def create_hotl(request: Request):
-        return {"tenant_id": request.state.tenant_id}
+        return {"user_id": request.state.user_id}
 
     @app.post("/hotl/clear")
     async def clear_hotl(request: Request):
-        return {"tenant_id": request.state.tenant_id, "ok": True}
+        return {"user_id": request.state.user_id, "ok": True}
 
     return app, conn
 
@@ -72,7 +70,7 @@ def test_post_hotl_valid_internal_key_returns_200(monkeypatch):
         headers={"X-Internal-Key": VALID_INTERNAL_KEY},
     )
     assert resp.status_code == 200
-    assert resp.json()["tenant_id"] == "internal"
+    assert resp.json()["user_id"] == "internal"
 
 
 def test_post_hotl_invalid_internal_key_returns_401(monkeypatch):
@@ -134,22 +132,21 @@ def test_internal_key_bypass_only_on_post_hotl(monkeypatch):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# POST /hotl/clear — deletes entries for correct tenant
+# POST /hotl/clear — deletes all entries (no tenant scoping)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_clear_hotl_logs_scoped_to_tenant():
-    """clear_hotl_logs deletes only rows for the given tenant_id."""
+async def test_clear_hotl_logs_deletes_all():
+    """clear_hotl_logs issues a DELETE with no tenant scoping."""
     from backend.db_postgres import clear_hotl_logs
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value="DELETE 5")
 
-    await clear_hotl_logs(conn, TENANT_ID)
+    await clear_hotl_logs(conn)
 
     conn.execute.assert_called_once()
-    args, kwargs = conn.execute.call_args
-    assert args[1] == TENANT_ID  # tenant_id is the 2nd positional arg (after SQL string)
-    assert args[1] != OTHER_TENANT
+    sql = conn.execute.call_args[0][0].upper()
+    assert "DELETE" in sql
 
 
 @pytest.mark.asyncio
@@ -159,62 +156,54 @@ async def test_clear_hotl_logs_uses_delete_statement():
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value="DELETE 0")
 
-    await clear_hotl_logs(conn, TENANT_ID)
+    await clear_hotl_logs(conn)
 
     sql = conn.execute.call_args[0][0].upper()
     assert "DELETE" in sql
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GET /chat/{agent}/history — wrong-tenant thread_id returns empty messages
+# GET /chat/{agent}/history — wrong-agent thread_id returns empty messages
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_history_app(tenant_id: str = TENANT_ID):
-    """
-    Build a minimal app exposing GET /chat/{agent}/history.
-    Uses a single pre-seeded middleware that sets tenant_id — no JWT needed.
-    This directly tests the thread_id scoping logic in isolation.
-    """
+def make_history_app():
+    """Build a minimal app exposing GET /chat/{agent}/history."""
     app = FastAPI()
 
-    # Middleware runs in reverse registration order in FastAPI (last added = outermost).
-    # We register a simple tenant-seeding middleware so routes can read request.state.tenant_id.
     @app.middleware("http")
-    async def inject_tenant(request: Request, call_next):
-        request.state.tenant_id = tenant_id
+    async def inject_user(request: Request, call_next):
         request.state.user_id = "test-user"
         return await call_next(request)
 
     @app.get("/chat/{agent}/history")
     async def chat_history(agent: str, thread_id: str, request: Request):
-        t = request.state.tenant_id
-        if not thread_id.startswith(f"thread-{t}-"):
+        if not thread_id.startswith(f"thread-{agent}-"):
             return {"messages": []}
         return {"messages": [{"role": "user", "content": "hello"}]}
 
     return app
 
 
-def test_chat_history_wrong_tenant_thread_id_returns_empty(monkeypatch):
-    """thread_id scoped to a different tenant returns empty messages list."""
-    app = make_history_app(tenant_id=TENANT_ID)
+def test_chat_history_wrong_agent_thread_id_returns_empty(monkeypatch):
+    """thread_id for a different agent returns empty messages list."""
+    app = make_history_app()
     client = TestClient(app, raise_server_exceptions=False)
 
-    wrong_tenant_thread = f"thread-{OTHER_TENANT}-budget-agent-abc123"
+    wrong_agent_thread = "thread-other-agent-abc123"
     resp = client.get(
         "/chat/budget/history",
-        params={"thread_id": wrong_tenant_thread},
+        params={"thread_id": wrong_agent_thread},
     )
     assert resp.status_code == 200
     assert resp.json() == {"messages": []}
 
 
-def test_chat_history_correct_tenant_thread_id_returns_messages(monkeypatch):
-    """thread_id scoped to the correct tenant returns messages."""
-    app = make_history_app(tenant_id=TENANT_ID)
+def test_chat_history_correct_agent_thread_id_returns_messages(monkeypatch):
+    """thread_id scoped to the correct agent returns messages."""
+    app = make_history_app()
     client = TestClient(app, raise_server_exceptions=False)
 
-    correct_thread = f"thread-{TENANT_ID}-budget-agent-abc123"
+    correct_thread = "thread-budget-abc123"
     resp = client.get(
         "/chat/budget/history",
         params={"thread_id": correct_thread},
