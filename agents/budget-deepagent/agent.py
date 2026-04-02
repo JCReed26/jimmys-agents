@@ -3,14 +3,12 @@ import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
-from deepagents.middleware import SkillsMiddleware, MemoryMiddleware, FilesystemMiddleware
-from deepagents import middle
 from deepagents import create_deep_agent
+from langchain.agents.middleware.types import AgentMiddleware
 from deepagents.backends import FilesystemBackend
 from langchain_community.tools import DuckDuckGoSearchRun
 from pathlib import Path
 from langchain.tools import tool
-from langchain_google_community.sheets import SheetsToolkit
 
 import csv
 import io
@@ -26,7 +24,7 @@ load_dotenv()
 #   cheap_haiku_three_model — Claude 3 Haiku via OpenRouter (very cheap)
 #   free_nvidia_model   — nvidia/llama-3.1-nemotron-70b-instruct (free, rate-limited)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from backend.models import gemini_flash_model as llm
+from backend.models import free_nvidia_nemotron as llm
 
 SYSTEM_PROMPT = """
 You are an uncompromising, highly capable financial advisor agent managing my budget. 
@@ -51,7 +49,7 @@ The google sheet will have a tab for each csv file that you have. and when they 
 You are in development; if you need data, use your tools to fetch it.
 """
 
-class BudgetSyncMiddleware():
+class BudgetSyncMiddleware(AgentMiddleware):
     """Syncs Google Sheets ↔ CSV before/after each agent run and posts HOTL logs."""
 
     async def before_agent(self, state, runtime):
@@ -146,12 +144,7 @@ agent = create_deep_agent(
     skills=skills,
     memory=memory,
     backend=backend,
-    middleware=[
-        BudgetSyncMiddleware(), 
-        SkillsMiddleware(), 
-        MemoryMiddleware(), 
-        FilesystemMiddleware(),
-    ],
+    middleware=[BudgetSyncMiddleware()],
     interrupt_on={
         "fetch_latest_bank_transactions": False,    # no interrupt
         "request_human_approval": True,             # approve, edit, reject
