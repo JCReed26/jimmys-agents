@@ -1,5 +1,4 @@
 import os
-import asyncpg
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from jose import jwt, JWTError
@@ -47,7 +46,6 @@ async def auth_middleware(request: Request, call_next):
     ):
         provided = request.headers.get("X-Internal-Key", "")
         if provided == internal_key:
-            request.state.tenant_id = "internal"
             request.state.user_id = "internal"
             return await call_next(request)
         # Key was provided but wrong — fail immediately (don't fall through to JWT)
@@ -61,14 +59,13 @@ async def auth_middleware(request: Request, call_next):
 
     try:
         issuer = _get_issuer()
-        options = {"verify_iss": True}
         payload = jwt.decode(
             token,
             _get_jwt_secret(),
             algorithms=["HS256"],
             audience="authenticated",
             issuer=issuer,
-            options=options,
+            options={"verify_iss": True},
         )
     except JWTError:
         return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
@@ -77,18 +74,5 @@ async def auth_middleware(request: Request, call_next):
     if not user_id:
         return JSONResponse(status_code=401, content={"detail": "Token missing sub claim"})
 
-    try:
-        pool = request.app.state.pool
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT tenant_id FROM user_tenants WHERE user_id = $1", user_id
-            )
-    except asyncpg.PostgresError:
-        return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
-
-    if not row:
-        return JSONResponse(status_code=403, content={"detail": "User has no tenant"})
-
-    request.state.tenant_id = str(row["tenant_id"])
     request.state.user_id = user_id
     return await call_next(request)
