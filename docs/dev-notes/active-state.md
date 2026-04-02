@@ -1,8 +1,20 @@
 # Active State
 
-**Updated**: 2026-03-29
-**Branch**: `main` (merged from `feat/supabase-auth` PR #16)
-**Status**: Harness fully hardened. All security gaps closed, critical crash fixed, frontend stabilized. Ready to build agents.
+**Updated**: 2026-04-02
+**Branch**: `refactor/remove-multitenant`
+**Status**: Multi-tenant system removed. Single-user. DB, backend, and frontend all simplified. Ready to build agents.
+
+---
+
+## What Changed (2026-04-02): Multi-tenant removal
+
+- Migration 008 applied: dropped `tenants`, `user_tenants`, `tenant_agents` tables; removed `tenant_id` from all runtime tables; renamed `tenant_agent_configs` → `agent_configs`
+- Auth middleware simplified: JWT validation only, no DB lookup. Sets `request.state.user_id`
+- All data (HITL/HOTL/runs/schedules/memory) is now global — no tenant scoping
+- Admin page, admin API routes (`/api/admin/*`), and profile page deleted from frontend
+- Sidebar: removed Admin and Profile nav links, Cost Today stat removed from dashboard
+- Thread ID format: `thread-{agent}-{uuid}` (was `thread-{tenant_id}-{agent}-{uuid}`)
+- Branch: `refactor/remove-multitenant`
 
 ---
 
@@ -75,19 +87,19 @@
 |---|---|---|
 | HOTL ownership | Gateway (StreamTranslator), not agent | Keeps agent code clean; harness handles all observability |
 | Memory tab content | `skills/AGENTS.md` only | That's what the deepagent actually reads at runtime |
-| Admin gating | `ADMIN_TENANT_ID` env var (backend) + `NEXT_PUBLIC_ADMIN_TENANT_ID` (frontend) | Moved from hardcoded — same UUID, now configurable |
 | SQL organization | Named query files in `backend/sql/` | Easy to audit what queries exist; no inline SQL |
-| Thread IDs | `thread-{tenant_id}-{agent}-{uuid4}` format | Prefix encodes ownership; gateway validates on history fetch |
+| Thread IDs | `thread-{agent}-{uuid4}` format | Prefix encodes agent; gateway validates on history fetch |
 | LLM imports | `from backend.models import gemini_flash_model as llm` | All agents use models.py, not direct provider SDKs |
 | Schedule naming | `name` field (was `workflow`) | "workflow" was confusing; these are named scheduled agent calls |
-| Multi-schedule | `UNIQUE (tenant_id, agent, name)` | Many schedules per agent allowed; name differentiates them |
+| Multi-schedule | `UNIQUE (agent, name)` | Many schedules per agent allowed; name differentiates them |
+| Single-user | No tenant scoping anywhere | System is personal — multi-tenancy removed in refactor/remove-multitenant |
 
 ---
 
 ## Known Gaps (non-blocking)
 
 - Cost/token fields may be null for OpenRouter Gemini runs (OpenRouter doesn't always forward usage metadata)
-- No Postgres RLS — tenant isolation is application-layer only (acceptable for solo dev; add before onboarding real clients)
+- No Postgres RLS — single-user system, not needed
 - `_estimate_cost()` hardcoded to Gemini 2.5 Flash rate — inaccurate if agents use other models
 
 ---

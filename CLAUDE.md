@@ -103,17 +103,6 @@ make run-job-chain    # job-app-chain LangGraph server on :8004 (interactive)
 5. Add a `run-{name}` target to `Makefile` (copy existing target).
 6. Run `POST http://localhost:8080/registry/reload` to hot-load without restart.
 
-**Adding a new tenant (Client)**:
-1. In the Supabase dashboard, insert a new row in the `tenants` table.
-2. The user will need to log in to create an auth record in Supabase.
-3. Update the `tenants` table row to link `auth_user_id` to their Supabase auth UID.
-
-**Adding a new user**:
-Users authenticate via email OTP via Supabase. A user record is created on their first login. Then their `auth.uid()` needs to be linked to a `tenant_id` in the `tenants` table.
-
-**Allowing a tenant access to an instance of an agent**:
-1. In the Postgres database, insert a row into the `tenant_agents` table linking the `tenant_id` to the `agent_registry_id` (from the `agent_registry` table, populated from `agents.yaml`).
-
 ---
 
 ## deepagent Pattern (reference: `agents/budget-deepagent/`)
@@ -163,9 +152,6 @@ FastAPI on :8080. All paths:
 - `GET|POST /schedules`, `POST /schedules/{agent}/trigger` — APScheduler
 - `GET /stats`, `GET /search` — observability
 - `GET /agents/{name}/agents-md`, `PUT /agents/{name}/agents-md` — read/write agent AGENTS.md from filesystem
-- `GET /admin/tenants`, `POST /admin/tenants` — tenant management (superadmin only)
-- `GET /admin/agents`, `POST/DELETE /admin/tenant-agents` — agent assignment (superadmin only)
-- `GET/POST/DELETE /admin/users` — user-tenant linking (superadmin only)
 
 ---
 
@@ -175,7 +161,7 @@ Read these before working in the corresponding areas:
 
 | Working on | Read first |
 |---|---|
-| `backend/auth_middleware.py`, admin routes, tenant/user management | `docs/dev-notes/auth-flow.md` |
+| `backend/auth_middleware.py`, auth flow | `docs/dev-notes/auth-flow.md` |
 | `backend/db_postgres.py`, `backend/sql/`, `backend/migrations/` | `docs/dev-notes/database.md` |
 | `frontend/src/` (any component, hook, or API route) | `docs/dev-notes/frontend-patterns.md` |
 | Current PR, what was recently built, what's next | `docs/dev-notes/active-state.md` |
@@ -206,8 +192,8 @@ Read these before working in the corresponding areas:
 - **Auth is Supabase (email OTP)**: Backend requires `SUPABASE_URL`, `SUPABASE_JWT_SECRET`, `DATABASE_URL` (Postgres). Frontend requires `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. See `.env.example`.
 - **DB is Postgres, not SQLite**: `backend/db_postgres.py` replaces `backend/db.py`. All queries use asyncpg with a module-level pool (`_pool`). The pool is set during FastAPI lifespan — never import db.py for new code.
 - **All SQL in `backend/sql/`**: Named query files parsed by `backend/sql_loader.py`. No inline SQL in `api_server.py` or `db_postgres.py`.
-- **Multi-tenant: all queries scope by tenant_id**: JWT verified in `backend/auth_middleware.py`; `tenant_id` extracted and attached to `request.state`. Every DB function in `db_postgres.py` requires `tenant_id` as first arg.
-- **Thread IDs are namespaced**: Format is `thread-{tenant_id}-{agent}-{uuid4}`. The API validates the prefix on history fetch — never generate bare thread IDs.
+- **Single-user: no tenant scoping**: All DB queries are global. No `tenant_id` anywhere. `request.state.user_id` is set by auth middleware (Supabase sub or "internal") but not used for data scoping.
+- **Thread IDs format**: `thread-{agent}-{uuid4}`. The API validates the prefix on history fetch.
 - **APScheduler uses module-level `_pool`**: Scheduler jobs can't use `request.state`. `trigger_agent_run` and `_reload_schedules` use `_pool` directly — don't refactor to use request context.
 - **CORS preflight skips auth**: The `_auth` HTTP middleware in `api_server.py` skips `OPTIONS` requests. This is intentional — never add auth checks to OPTIONS.
 - **Models via `backend/models.py`**: Agents should import `gemini_flash_model` or `free_nvidia_model` from `models.py` instead of instantiating LLM clients directly. `free_nvidia_model` needs its model ID updated — `nvidia/llama-nemotron-embed-vl-1b-v2:free` is an embedding model; use `nvidia/llama-3.1-nemotron-70b-instruct:free` for a free chat LLM.
