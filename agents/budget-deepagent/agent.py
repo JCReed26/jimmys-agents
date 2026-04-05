@@ -2,7 +2,6 @@ import os
 import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
 from deepagents import create_deep_agent
 from langchain.agents.middleware.types import AgentMiddleware
 from deepagents.backends import FilesystemBackend
@@ -135,8 +134,6 @@ tools = [
 backend = FilesystemBackend(root_dir=Path(__file__).parent.absolute())
 skills = ["skills/"]
 memory = ["skills/AGENTS.md"]
-checkpointer = MemorySaver()
-
 agent = create_deep_agent(
     model=llm,
     tools=tools,
@@ -148,8 +145,7 @@ agent = create_deep_agent(
     interrupt_on={
         "fetch_latest_bank_transactions": False,    # no interrupt
         "request_human_approval": True,             # approve, edit, reject
-    },  
-    checkpointer=checkpointer,
+    },
     name="Financial Assistant",
 )
 

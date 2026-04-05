@@ -293,7 +293,7 @@ async def agents_status(request: Request):
     async with httpx.AsyncClient(timeout=2) as client:
         for agent in active_agents:
             entry: dict[str, Any] = {
-                "enabled": agent["status"] == "active",
+                "enabled": True,  # list_active_agents already filters WHERE is_globally_active=true
                 "port": agent["port"],
                 "accentColor": agent["accent_color"],
                 "displayName": agent["display_name"],

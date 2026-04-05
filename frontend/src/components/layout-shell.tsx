@@ -4,7 +4,6 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Mail, Calendar, DollarSign, GitBranch,
   LayoutDashboard, Inbox, ScrollText, Activity,
   CalendarClock, Settings, User, ChevronRight,
   Zap, BarChart3, PanelLeft, LogOut,
@@ -39,12 +38,6 @@ interface NavCounts {
 
 const overviewLinks = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-];
-
-const agentLinks = [
-  { href: "/agent/gmail-agent",    label: "Gmail",    icon: Mail,        color: "var(--agent-gmail)" },
-  { href: "/agent/calendar-agent", label: "Calendar", icon: Calendar,    color: "var(--agent-calendar)" },
-  { href: "/agent/budget-agent",   label: "Budget",   icon: DollarSign,  color: "var(--agent-budget)" },
 ];
 
 const systemLinks = [
@@ -111,22 +104,6 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
               <SidebarMenu>
                 {overviewLinks.map((item) => (
                   <NavItem key={item.href} {...item} pathname={pathname} />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <Separator className="mx-2 my-1 bg-sidebar-border" />
-
-          {/* Agents */}
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
-              Agents
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {agentLinks.map((item) => (
-                  <NavItem key={item.href} {...item} pathname={pathname} accentColor={item.color} />
                 ))}
               </SidebarMenu>
             </SidebarGroupContent>

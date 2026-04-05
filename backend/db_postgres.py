@@ -12,8 +12,8 @@ from typing import Optional
 from backend.sql_loader import load_sql
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def make_thread_id(agent: str) -> str:
