@@ -86,7 +86,11 @@ async def trigger_agent_run(
     ag_ui_payload = {
         "thread_id": thread_id,
         "run_id": run_id,
-        "messages": [{"role": "human", "content": prompt}],
+        "messages": [{"role": "user", "content": prompt, "id": str(uuid.uuid4())}],
+        "state": {},
+        "tools": [],
+        "context": [],
+        "forwarded_props": {},
     }
 
     _publish_live(agent, f'data: {json.dumps({"type": "RUN_STARTED", "runId": run_id, "threadId": thread_id})}\n\n')
@@ -276,6 +280,13 @@ async def reload_registry(request: Request):
     }
 
 
+@app.post("/registry/reset-circuits")
+async def reset_circuits(request: Request):
+    """Reset all circuit breakers — use after fixing an agent that was tripping the circuit."""
+    registry._circuits.clear()
+    return {"ok": True}
+
+
 @app.get("/agents")
 async def agents_status(request: Request):
     """List all active agents with live health + circuit breaker status."""
@@ -297,7 +308,7 @@ async def agents_status(request: Request):
                 "circuit": registry.circuit_status(agent["name"]),
             }
             try:
-                r = await client.get(f"http://localhost:{agent['port']}/assistants")
+                r = await client.get(f"http://localhost:{agent['port']}/runs/stream/health")
                 entry["status"] = "RUNNING" if r.status_code == 200 else "DOWN"
             except Exception:
                 entry["status"] = "DOWN"
@@ -361,10 +372,20 @@ async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     thread_id = req_data.get("thread_id") or db.make_thread_id(agent_name)
     messages = req_data.get("messages", [])
 
+    # Ensure every message has an id (AG-UI RunAgentInput requires it)
+    stamped = [
+        {**m, "id": m.get("id") or str(uuid.uuid4())}
+        for m in messages
+    ]
+
     ag_ui_payload = {
         "thread_id": thread_id,
         "run_id": run_id,
-        "messages": messages,
+        "messages": stamped,
+        "state": {},
+        "tools": [],
+        "context": [],
+        "forwarded_props": {},
     }
 
     _overview = ""
