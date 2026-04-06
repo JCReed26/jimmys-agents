@@ -27,7 +27,7 @@ run-calendar:
 	cd agents/calendar-agent && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8002 --no-browser
 
 run-budget:
-	cd agents/budget-deepagent && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8003 --no-browser
+	cd agents/budget-deepagent && ../../.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8003 --reload
 
 run-job-chain:
 	cd automations/job-app-chain && python main.py
@@ -41,7 +41,7 @@ start-all:
 	nohup sh -c 'cd frontend && npm run dev -- -p 3000' > logs/frontend.log 2>&1 & echo $$! > logs/frontend.pid
 	nohup sh -c 'cd agents/gmail-agent && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8001 --no-browser' > logs/gmail.log 2>&1 & echo $$! > logs/gmail.pid
 	nohup sh -c 'cd agents/calendar-agent && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8002 --no-browser' > logs/calendar.log 2>&1 & echo $$! > logs/calendar.pid
-	nohup sh -c 'cd agents/budget-deepagent && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8003 --no-browser' > logs/budget.log 2>&1 & echo $$! > logs/budget.pid
+	nohup sh -c 'cd agents/budget-deepagent && ../../.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8003' > logs/budget.log 2>&1 & echo $$! > logs/budget.pid
 	nohup sh -c 'cd automations/job-app-chain && ../../.venv/bin/langgraph dev --host 0.0.0.0 --port 8004 --no-browser' > logs/job-chain.log 2>&1 & echo $$! > logs/job-chain.pid
 	@echo "All services started. API=:8080 Frontend=:3000 Agents=:8001-8004. Logs in logs/"
 

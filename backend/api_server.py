@@ -41,7 +41,6 @@ logger = logging.getLogger("jimmys-agents.gateway")
 from backend import db_postgres as db
 from backend.agent_registry import registry
 from backend.auth_middleware import auth_middleware, validate_env
-from backend.translator import StreamTranslator
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -65,8 +64,8 @@ async def trigger_agent_run(
     thread_id: str | None = None,
 ):
     """
-    Fire a LangGraph /runs/stream call for scheduled runs.
-    Translates to AG-UI, publishes to live queue, writes HOTL on completion.
+    Fire an AG-UI /runs/stream call for scheduled runs.
+    Passes through AG-UI events to live queue, writes HOTL on completion.
     """
     global _pool
     run_id = str(uuid.uuid4())
@@ -84,56 +83,54 @@ async def trigger_agent_run(
         thread_id = db.make_thread_id(agent)
 
     prompt = task_prompt or "Run your scheduled task."
-    lg_payload = {
-        "assistant_id": "agent",
-        "input": {"messages": [{"role": "user", "content": prompt}]},
-        "config": {"configurable": {"thread_id": thread_id}},
-        "stream_mode": ["messages"],
+    ag_ui_payload = {
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "messages": [{"role": "human", "content": prompt}],
     }
 
-    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
-    _publish_live(agent, translator.start())
+    _publish_live(agent, f'data: {json.dumps({"type": "RUN_STARTED", "runId": run_id, "threadId": thread_id})}\n\n')
+    _overview = ""
+    _tool_records: dict[str, dict] = {}
 
     try:
         async with httpx.AsyncClient(timeout=300) as client:
             async with client.stream(
                 "POST",
                 f"{registry.base_url(agent)}/runs/stream",
-                json=lg_payload,
+                json=ag_ui_payload,
                 headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             ) as resp:
                 resp.raise_for_status()
 
-                current_event_type = "messages/partial"
                 async for line in resp.aiter_lines():
-                    if line.startswith("event: "):
-                        current_event_type = line[7:].strip()
-                    elif line.startswith("data: "):
-                        data_str = line[6:]
+                    if line.startswith("data: "):
                         try:
-                            data = json.loads(data_str)
+                            event = json.loads(line[6:])
+                            etype = event.get("type", "")
+                            if etype == "TEXT_MESSAGE_CONTENT" and not _overview:
+                                _overview = event.get("delta", "")
+                            elif etype == "TOOL_CALL_START":
+                                tc_id = event.get("toolCallId", "")
+                                _tool_records[tc_id] = {"name": event.get("toolCallName", ""), "args": {}, "result": None}
+                            elif etype == "TOOL_CALL_RESULT":
+                                tc_id = event.get("toolCallId", "")
+                                if tc_id in _tool_records:
+                                    _tool_records[tc_id]["result"] = event.get("content", "")
                         except json.JSONDecodeError:
-                            continue
-                        for ag_ui_line in translator.feed(current_event_type, data):
-                            _publish_live(agent, ag_ui_line)
+                            pass
+                    if line:
+                        _publish_live(agent, line + "\n")
 
-        for ag_ui_line in translator.finish():
-            _publish_live(agent, ag_ui_line)
-
-        usage = translator.usage_metadata or {}
-        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-        cost_usd = _estimate_cost(token_count)
+        hotl_summary = {"overview": _overview[:500] or "Run completed.", "tools": list(_tool_records.values()), "usage": {}}
         async with _pool.acquire() as conn:
-            await db.finish_run(conn, run_id, "done", token_count=token_count, cost_usd=cost_usd)
-            await db.create_hotl_log(
-                conn, agent, run_id, translator.hotl_summary,
-                cost_usd=cost_usd, total_tokens=token_count,
-            )
+            await db.finish_run(conn, run_id, "done")
+            await db.create_hotl_log(conn, agent, run_id, hotl_summary)
 
     except Exception as e:
         async with _pool.acquire() as conn:
             await db.finish_run(conn, run_id, "error", error_msg=str(e))
-        _publish_live(agent, translator.error(str(e)))
+        _publish_live(agent, f'data: {json.dumps({"type": "RUN_ERROR", "runId": run_id, "message": str(e)})}\n\n')
 
 
 async def _reload_schedules():
@@ -346,8 +343,7 @@ async def agents_status(request: Request):
 
 async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     """
-    Call {agent_url}/runs/stream (LangGraph native SSE),
-    translate to AG-UI events, stream to browser.
+    Forward request to agent's AG-UI /runs/stream endpoint, pass events through to browser.
     Writes run_record and HOTL on completion.
     """
     run_id = str(uuid.uuid4())
@@ -365,15 +361,14 @@ async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
     thread_id = req_data.get("thread_id") or db.make_thread_id(agent_name)
     messages = req_data.get("messages", [])
 
-    lg_payload = {
-        "assistant_id": "agent",
-        "input": {"messages": messages},
-        "config": {"configurable": {"thread_id": thread_id}},
-        "stream_mode": ["messages"],
+    ag_ui_payload = {
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "messages": messages,
     }
 
-    translator = StreamTranslator(run_id=run_id, thread_id=thread_id)
-    yield translator.start()
+    _overview = ""
+    _tool_records: dict[str, dict] = {}
 
     _run_finished = False
     try:
@@ -381,39 +376,37 @@ async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
             async with client.stream(
                 "POST",
                 f"{registry.base_url(agent_name)}/runs/stream",
-                json=lg_payload,
+                json=ag_ui_payload,
                 headers={"Content-Type": "application/json", "Accept": "text/event-stream"},
             ) as resp:
                 resp.raise_for_status()
                 registry.record_success(agent_name)
 
-                current_event_type = "messages/partial"
                 async for line in resp.aiter_lines():
                     if await request.is_disconnected():
                         break
-                    if line.startswith("event: "):
-                        current_event_type = line[7:].strip()
-                    elif line.startswith("data: "):
-                        data_str = line[6:]
+                    if line.startswith("data: "):
                         try:
-                            data = json.loads(data_str)
+                            event = json.loads(line[6:])
+                            etype = event.get("type", "")
+                            if etype == "TEXT_MESSAGE_CONTENT" and not _overview:
+                                _overview = event.get("delta", "")
+                            elif etype == "TOOL_CALL_START":
+                                tc_id = event.get("toolCallId", "")
+                                _tool_records[tc_id] = {"name": event.get("toolCallName", ""), "args": {}, "result": None}
+                            elif etype == "TOOL_CALL_RESULT":
+                                tc_id = event.get("toolCallId", "")
+                                if tc_id in _tool_records:
+                                    _tool_records[tc_id]["result"] = event.get("content", "")
                         except json.JSONDecodeError:
-                            continue
-                        for ag_ui_line in translator.feed(current_event_type, data):
-                            yield ag_ui_line
+                            pass
+                    if line:
+                        yield line + "\n"
 
-        for ag_ui_line in translator.finish():
-            yield ag_ui_line
-
-        usage = translator.usage_metadata or {}
-        token_count = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-        cost_usd = _estimate_cost(token_count)
+        hotl_summary = {"overview": _overview[:500] or "Run completed.", "tools": list(_tool_records.values()), "usage": {}}
         async with pool.acquire() as conn:
-            await db.finish_run(conn, run_id, "done", token_count=token_count, cost_usd=cost_usd)
-            await db.create_hotl_log(
-                conn, agent_name, run_id, translator.hotl_summary,
-                cost_usd=cost_usd, total_tokens=token_count,
-            )
+            await db.finish_run(conn, run_id, "done")
+            await db.create_hotl_log(conn, agent_name, run_id, hotl_summary)
         _run_finished = True
 
     except httpx.HTTPStatusError as e:
@@ -421,14 +414,14 @@ async def _proxy_sse(agent_name: str, request: Request) -> AsyncIterator[str]:
         async with pool.acquire() as conn:
             await db.finish_run(conn, run_id, "error", error_msg=str(e))
         _run_finished = True
-        yield translator.error(f"Agent returned HTTP {e.response.status_code}")
+        yield f'data: {json.dumps({"type": "RUN_ERROR", "runId": run_id, "message": f"Agent returned HTTP {e.response.status_code}"})}\n\n'
 
     except Exception as e:
         registry.record_failure(agent_name)
         async with pool.acquire() as conn:
             await db.finish_run(conn, run_id, "error", error_msg=str(e))
         _run_finished = True
-        yield translator.error(str(e))
+        yield f'data: {json.dumps({"type": "RUN_ERROR", "runId": run_id, "message": str(e)})}\n\n'
 
     finally:
         if not _run_finished:
