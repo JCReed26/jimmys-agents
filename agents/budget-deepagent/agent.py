@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from deepagents import create_deep_agent
 from langchain.agents.middleware.types import AgentMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 from deepagents.backends import FilesystemBackend
 from langchain_community.tools import DuckDuckGoSearchRun
 from pathlib import Path
@@ -23,7 +24,7 @@ load_dotenv()
 #   cheap_haiku_three_model — Claude 3 Haiku via OpenRouter (very cheap)
 #   free_nvidia_model   — nvidia/llama-3.1-nemotron-70b-instruct (free, rate-limited)
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from backend.models import free_nvidia_nemotron as llm
+from backend.models import gemini_flash_model as llm
 
 SYSTEM_PROMPT = """
 You are an uncompromising, highly capable financial advisor agent managing my budget. 
@@ -51,21 +52,19 @@ You are in development; if you need data, use your tools to fetch it.
 class BudgetSyncMiddleware(AgentMiddleware):
     """Syncs Google Sheets ↔ CSV before/after each agent run and posts HOTL logs."""
 
-    async def before_agent(self, state, runtime):
+    async def abefore_agent(self, state, runtime):
         from sheets_to_csv import sync_from_sheets_to_csv
         try:
             sync_from_sheets_to_csv()
         except Exception as e:
             print(f"[BudgetSyncMiddleware] Pre-sync failed (continuing): {e}")
-        return None
 
-    async def after_agent(self, state, runtime):
+    async def aafter_agent(self, state, runtime):
         from sheets_to_csv import sync_from_csv_to_sheets
         try:
             sync_from_csv_to_sheets()
         except Exception as e:
             print(f"[BudgetSyncMiddleware] Post-sync failed: {e}")
-        return None
 
 @tool
 def fetch_latest_bank_transactions(days_back: int = 3) -> str:
@@ -147,6 +146,7 @@ agent = create_deep_agent(
         "request_human_approval": True,             # approve, edit, reject
     },
     name="Financial Assistant",
+    checkpointer=MemorySaver(),  # replaced by AsyncSqliteSaver in server.py lifespan
 )
 
 

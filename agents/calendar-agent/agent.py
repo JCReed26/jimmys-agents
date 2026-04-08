@@ -25,7 +25,7 @@ from backend.models import gemini_flash_model as llm
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 
-_AGENT_NAME = "template-agent"  # Update this when copying
+_AGENT_NAME = "calendar-agent"
 
 SYSTEM_PROMPT = """You are a helpful assistant. Answer concisely and clearly."""
 

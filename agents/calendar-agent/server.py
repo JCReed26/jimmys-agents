@@ -1,11 +1,11 @@
 """
-AG-UI server for budget-deepagent.
+AG-UI server — standard pattern for all agents in jimmys-agents.
 
 Run from repo root:
-    make run-budget
+    make run-{name}
 
 Or directly:
-    cd agents/budget-deepagent && ../../.venv/bin/uvicorn server:app --host 0.0.0.0 --port 8003
+    cd agents/{name} && ../../.venv/bin/uvicorn server:app --host 0.0.0.0 --port {port} --reload
 
 Exposes:
     POST /runs/stream          — AG-UI SSE chat endpoint
@@ -30,20 +30,26 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from agent import agent as graph
 
+# ── Update these when copying to a new agent ─────────────────────────────────
+_AGENT_NAME = "calendar-agent"   # must match agents.yaml key and agents.ts
+_PORT_HINT  = 8099               # documentation only; actual port set in Makefile
+# ─────────────────────────────────────────────────────────────────────────────
+
 _DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "checkpoints.db")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # AsyncSqliteSaver persists chat history across server restarts.
+    # Shared db for all agents — thread_id namespacing prevents collisions.
     async with AsyncSqliteSaver.from_conn_string(_DB_PATH) as checkpointer:
         graph.checkpointer = checkpointer
         yield
 
 
-app = FastAPI(title="budget-agent", lifespan=lifespan)
+app = FastAPI(title=_AGENT_NAME, lifespan=lifespan)
 
-_ag_ui_agent = LangGraphAgent(name="budget-agent", graph=graph)
+_ag_ui_agent = LangGraphAgent(name=_AGENT_NAME, graph=graph)
 add_langgraph_fastapi_endpoint(app, _ag_ui_agent, path="/runs/stream")
 
 
