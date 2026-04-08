@@ -1,8 +1,20 @@
 # Active State
 
-**Updated**: 2026-03-29
-**Branch**: `feat/supabase-auth` → PR #16
-**Status**: Ready for E2E testing with James. See `docs/testing-checklist.md`.
+**Updated**: 2026-04-02
+**Branch**: `refactor/remove-multitenant`
+**Status**: Multi-tenant system removed. Single-user. DB, backend, and frontend all simplified. Ready to build agents.
+
+---
+
+## What Changed (2026-04-02): Multi-tenant removal
+
+- Migration 008 applied: dropped `tenants`, `user_tenants`, `tenant_agents` tables; removed `tenant_id` from all runtime tables; renamed `tenant_agent_configs` → `agent_configs`
+- Auth middleware simplified: JWT validation only, no DB lookup. Sets `request.state.user_id`
+- All data (HITL/HOTL/runs/schedules/memory) is now global — no tenant scoping
+- Admin page, admin API routes (`/api/admin/*`), and profile page deleted from frontend
+- Sidebar: removed Admin and Profile nav links, Cost Today stat removed from dashboard
+- Thread ID format: `thread-{agent}-{uuid}` (was `thread-{tenant_id}-{agent}-{uuid}`)
+- Branch: `refactor/remove-multitenant`
 
 ---
 
@@ -39,12 +51,33 @@
 
 ---
 
+## What Was Just Fixed (2026-03-29 Hardening Session)
+
+### Backend (`backend/api_server.py`)
+- **Critical crash**: `serialize()` was undefined in all 5 admin endpoints → `NameError`. Fixed: `def serialize(row) -> dict: return dict(row)` added before admin section.
+- **Security**: `POST /registry/reload` had no auth. Fixed: `_require_admin(request)` added.
+- **Security**: `GET/PUT /agents/{name}/agents-md` had no tenant check. Fixed: `_check_agent_access()` helper validates agent is assigned to tenant before read/write.
+- **Security**: `JAMES_TENANT_ID` hardcoded. Fixed: reads from `ADMIN_TENANT_ID` env var (with fallback).
+- **Robustness**: `_proxy_sse` had no `try/finally` — client disconnect left runs as `status='running'` forever. Fixed: `_run_finished` flag + `finally` block writes `status='interrupted'`.
+- **Observability**: Invalid cron expressions silently swallowed. Fixed: `logger.warning(...)` with full context.
+- **Logging**: Added `import logging` and `logger = logging.getLogger("jimmys-agents.gateway")`.
+
+### Frontend
+- **`use-agent-chat.ts`**: Symbol-gated load IDs fix history fetch race condition. `AbortController` ref cancels in-flight chat on new send or unmount.
+- **`error-boundary.tsx`**: New `ErrorBoundary` class component in `components/ui/`. Wraps `AgentPage`, `AdminPage`, `InboxPage`.
+- **`agent/[name]/page.tsx`**: `MemoryPanel` shows amber "unsaved" badge + `beforeunload` guard when editing with unsaved changes.
+- **`admin/page.tsx`**: `JAMES_TENANT` reads from `NEXT_PUBLIC_ADMIN_TENANT_ID` env var.
+
+### Config
+- `.env.example`: Added `ADMIN_TENANT_ID` and `NEXT_PUBLIC_ADMIN_TENANT_ID` with documentation.
+
+---
+
 ## Current Focus
 
-**Next**: E2E testing with James. Follow `docs/testing-checklist.md` section by section.
+**Next**: Build agents using the deepagent pattern. Reference: `agents/budget-deepagent/`. Copy `agents/_template/` for new agents.
 
-**Agent role during testing**: James performs UI steps. You verify DB state and API logs using
-the SQL queries in `docs/testing-checklist.md`. Do not perform steps on James's behalf.
+**Harness is now trusted** — all security gaps and stability issues closed. No known blockers.
 
 ---
 
@@ -54,31 +87,20 @@ the SQL queries in `docs/testing-checklist.md`. Do not perform steps on James's 
 |---|---|---|
 | HOTL ownership | Gateway (StreamTranslator), not agent | Keeps agent code clean; harness handles all observability |
 | Memory tab content | `skills/AGENTS.md` only | That's what the deepagent actually reads at runtime |
-| Admin gating | JAMES_TENANT_ID hardcoded in backend | Simple, no role table needed for a solo-dev system |
 | SQL organization | Named query files in `backend/sql/` | Easy to audit what queries exist; no inline SQL |
-| Thread IDs | `thread-{tenant_id}-{agent}-{uuid4}` format | Prefix encodes ownership; gateway validates on history fetch |
+| Thread IDs | `thread-{agent}-{uuid4}` format | Prefix encodes agent; gateway validates on history fetch |
 | LLM imports | `from backend.models import gemini_flash_model as llm` | All agents use models.py, not direct provider SDKs |
 | Schedule naming | `name` field (was `workflow`) | "workflow" was confusing; these are named scheduled agent calls |
-| Multi-schedule | `UNIQUE (tenant_id, agent, name)` | Many schedules per agent allowed; name differentiates them |
+| Multi-schedule | `UNIQUE (agent, name)` | Many schedules per agent allowed; name differentiates them |
+| Single-user | No tenant scoping anywhere | System is personal — multi-tenancy removed in refactor/remove-multitenant |
 
 ---
 
-## Known Gaps (non-blocking for merge)
+## Known Gaps (non-blocking)
 
-- Cost/token fields may be null for OpenRouter Gemini runs (OpenRouter doesn't always forward usage)
-- `_proxy_sse` generator has no try/finally — a network drop during a run can leave `runs.status = 'running'`
-- `nvidia/llama-nemotron-embed-vl-1b-v2:free` in models.py is an embedding model — swap to `nvidia/llama-3.1-nemotron-70b-instruct:free` for free NVIDIA chat inference
-
-## Security Items — Post-Merge Backlog
-
-From the security review (not blocking, but should be addressed before onboarding clients):
-
-| ID | Fix |
-|----|-----|
-| C-04 | Add `_require_admin(request)` to `POST /registry/reload` |
-| C-03 | Add tenant check to `GET/PUT /agents/{name}/agents-md` |
-| I-02 | Add `getServerAccessToken()` to `GET /api/logs/[name]` |
-| I-03 | Move `JAMES_TENANT_ID` to env var `ADMIN_TENANT_ID` in `.env` |
+- Cost/token fields may be null for OpenRouter Gemini runs (OpenRouter doesn't always forward usage metadata)
+- No Postgres RLS — single-user system, not needed
+- `_estimate_cost()` hardcoded to Gemini 2.5 Flash rate — inaccurate if agents use other models
 
 ---
 

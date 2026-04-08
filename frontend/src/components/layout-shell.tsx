@@ -1,20 +1,16 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Mail, Calendar, DollarSign, GitBranch,
-  LayoutDashboard, Inbox, ScrollText, Activity,
-  CalendarClock, Settings, User, ChevronRight,
-  Zap, BarChart3, PanelLeft, LogOut, Shield,
+  LayoutDashboard, User, ChevronRight,
+  Zap, LogOut,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SidebarProvider,
   Sidebar,
@@ -25,16 +21,10 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
   SidebarGroup,
-  SidebarGroupLabel,
   SidebarGroupContent,
   SidebarTrigger,
   SidebarInset,
 } from "@/components/ui/sidebar";
-
-interface NavCounts {
-  hitl: number;
-  hotlUnread: number;
-}
 
 // ─── Nav structure ────────────────────────────────────────────────
 
@@ -42,60 +32,17 @@ const overviewLinks = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
 ];
 
-const agentLinks = [
-  { href: "/agent/gmail-agent",    label: "Gmail",    icon: Mail,        color: "var(--agent-gmail)" },
-  { href: "/agent/calendar-agent", label: "Calendar", icon: Calendar,    color: "var(--agent-calendar)" },
-  { href: "/agent/budget-agent",   label: "Budget",   icon: DollarSign,  color: "var(--agent-budget)" },
-];
-
-const systemLinks = [
-  { href: "/profile",   label: "Profile",  icon: User },
-  { href: "/settings",  label: "Settings", icon: Settings },
-  { href: "/admin",     label: "Admin",    icon: Shield },
-];
-
 // ─── Layout shell ─────────────────────────────────────────────────
 
 export function LayoutShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [counts, setCounts] = useState<NavCounts>({ hitl: 0, hotlUnread: 0 });
-  const [tenantName, setTenantName] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function fetchCounts() {
-      try {
-        const r = await fetch("/api/nav-counts", { cache: "no-store" });
-        if (r.ok) setCounts(await r.json());
-      } catch { /* silently ignore */ }
-    }
-    async function fetchMe() {
-      try {
-        const r = await fetch("/api/me", { cache: "no-store" });
-        if (r.ok) {
-          const data = await r.json();
-          setTenantName(data.tenant_name ?? null);
-        }
-      } catch { /* silently ignore */ }
-    }
-    fetchCounts();
-    fetchMe();
-    const iv = setInterval(fetchCounts, 15000);
-    return () => clearInterval(iv);
-  }, []);
 
   async function handleSignOut() {
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push("/login");
   }
-
-  const monitoringLinks = [
-    { href: "/observe",   label: "Observability", icon: BarChart3 },
-    { href: "/logs",      label: "Run Logs",       icon: ScrollText,  badge: counts.hotlUnread },
-    { href: "/inbox",     label: "HITL Inbox",     icon: Inbox,       badge: counts.hitl },
-    { href: "/schedules", label: "Schedules",      icon: CalendarClock },
-  ];
 
   if (pathname.startsWith("/login")) {
     return (
@@ -113,11 +60,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <Link href="/" className="flex items-center gap-2">
             <Zap className="h-4 w-4 text-[var(--agent-calendar)]" />
             <span className="font-semibold text-sm tracking-tight group-data-[collapsible=icon]:hidden">
-              {tenantName ? (
-                tenantName.length > 20 ? `${tenantName.substring(0, 17)}...` : tenantName
-              ) : (
-                <Skeleton className="h-4 w-24 inline-block" />
-              )}
+              Jimmy's Agents
             </span>
           </Link>
         </SidebarHeader>
@@ -134,46 +77,10 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <Separator className="mx-2 my-1 bg-sidebar-border" />
-
-          {/* Agents */}
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
-              Agents
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {agentLinks.map((item) => (
-                  <NavItem key={item.href} {...item} pathname={pathname} accentColor={item.color} />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <Separator className="mx-2 my-1 bg-sidebar-border" />
-
-          {/* Monitoring */}
-          <SidebarGroup>
-            <SidebarGroupLabel className="text-[10px] uppercase tracking-widest text-muted-foreground/60 px-2 pb-1">
-              Monitoring
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {monitoringLinks.map((item) => (
-                  <NavItem key={item.href} {...item} pathname={pathname} badge={item.badge} />
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
         </SidebarContent>
 
         {/* Footer */}
         <SidebarFooter className="border-t border-sidebar-border px-2 py-2">
-          <SidebarMenu>
-            {systemLinks.map((item) => (
-              <NavItem key={item.href} {...item} pathname={pathname} />
-            ))}
-          </SidebarMenu>
           {/* User pill */}
           <div className="flex items-center justify-between px-2 py-2 rounded-md hover:bg-sidebar-accent/40 transition-colors">
             <div className="flex items-center gap-2 min-w-0 group-data-[collapsible=icon]:hidden">
@@ -181,7 +88,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
                 <User className="h-3 w-3 text-muted-foreground" />
               </div>
               <span className="text-xs text-muted-foreground truncate">
-                {tenantName ?? "…"}
+                Jimmy's Agents
               </span>
             </div>
             <Button
@@ -204,25 +111,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
           <SidebarTrigger className="h-7 w-7" />
           <Separator orientation="vertical" className="h-4" />
           <Breadcrumb pathname={pathname} />
-          <div className="ml-auto flex items-center gap-2">
-            {counts.hitl > 0 && (
-              <Link href="/inbox">
-                <Badge variant="destructive" className="text-xs font-mono cursor-pointer">
-                  {counts.hitl} pending
-                </Badge>
-              </Link>
-            )}
-            {counts.hotlUnread > 0 && (
-              <Link href="/logs">
-                <Badge
-                  variant="outline"
-                  className="text-xs font-mono cursor-pointer border-amber-500/40 text-amber-400"
-                >
-                  {counts.hotlUnread} unread
-                </Badge>
-              </Link>
-            )}
-          </div>
+          <div className="ml-auto" />
         </header>
 
         <main className="flex-1 overflow-y-auto p-6">
@@ -241,10 +130,9 @@ interface NavItemProps {
   icon: React.ElementType;
   pathname: string;
   accentColor?: string;
-  badge?: number;
 }
 
-function NavItem({ href, label, icon: Icon, pathname, accentColor, badge }: NavItemProps) {
+function NavItem({ href, label, icon: Icon, pathname, accentColor }: NavItemProps) {
   const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
   return (
     <SidebarMenuItem>
@@ -262,11 +150,7 @@ function NavItem({ href, label, icon: Icon, pathname, accentColor, badge }: NavI
               {label}
             </span>
           </span>
-          {badge && badge > 0 ? (
-            <span className="ml-auto font-mono text-[10px] text-muted-foreground">
-              {badge > 99 ? "99+" : badge}
-            </span>
-          ) : active && !accentColor ? (
+          {active && !accentColor ? (
             <ChevronRight className="ml-auto h-3 w-3 text-muted-foreground/50" />
           ) : null}
         </Link>

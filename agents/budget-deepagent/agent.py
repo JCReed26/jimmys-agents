@@ -2,9 +2,9 @@ import os
 import sys
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
-from langchain_core.checkpoints import MemorySaver
-from deepagents.middleware import AgentMiddleware, SkillsMiddleware, MemoryMiddleware, FilesystemMiddleware
 from deepagents import create_deep_agent
+from langchain.agents.middleware.types import AgentMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 from deepagents.backends import FilesystemBackend
 from langchain_community.tools import DuckDuckGoSearchRun
 from pathlib import Path
@@ -52,21 +52,19 @@ You are in development; if you need data, use your tools to fetch it.
 class BudgetSyncMiddleware(AgentMiddleware):
     """Syncs Google Sheets ↔ CSV before/after each agent run and posts HOTL logs."""
 
-    async def before_agent(self, state, runtime):
+    async def abefore_agent(self, state, runtime):
         from sheets_to_csv import sync_from_sheets_to_csv
         try:
             sync_from_sheets_to_csv()
         except Exception as e:
             print(f"[BudgetSyncMiddleware] Pre-sync failed (continuing): {e}")
-        return None
 
-    async def after_agent(self, state, runtime):
+    async def aafter_agent(self, state, runtime):
         from sheets_to_csv import sync_from_csv_to_sheets
         try:
             sync_from_csv_to_sheets()
         except Exception as e:
             print(f"[BudgetSyncMiddleware] Post-sync failed: {e}")
-        return None
 
 @tool
 def fetch_latest_bank_transactions(days_back: int = 3) -> str:
@@ -135,8 +133,6 @@ tools = [
 backend = FilesystemBackend(root_dir=Path(__file__).parent.absolute())
 skills = ["skills/"]
 memory = ["skills/AGENTS.md"]
-checkpointer = MemorySaver()
-
 agent = create_deep_agent(
     model=llm,
     tools=tools,
@@ -144,18 +140,13 @@ agent = create_deep_agent(
     skills=skills,
     memory=memory,
     backend=backend,
-    middleware=[
-        BudgetSyncMiddleware(), 
-        SkillsMiddleware(), 
-        MemoryMiddleware(), 
-        FilesystemMiddleware(),
-    ],
+    middleware=[BudgetSyncMiddleware()],
     interrupt_on={
         "fetch_latest_bank_transactions": False,    # no interrupt
         "request_human_approval": True,             # approve, edit, reject
-    },  
-    checkpointer=checkpointer,
+    },
     name="Financial Assistant",
+    checkpointer=MemorySaver(),  # replaced by AsyncSqliteSaver in server.py lifespan
 )
 
 

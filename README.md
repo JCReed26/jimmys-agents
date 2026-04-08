@@ -1,55 +1,50 @@
 # jimmys-agents
 
-agents, workflows, and agentic systems
-
----
-
-## Currently Working On
-
-### Job App Chain
-
-A LangGraph Workflow that scrapes jobs -> sorts -> optimizes -> adds to sheet with autonomous updated tracking as user interacts.
+Personal multi-agent automation system. Next.js dashboard for monitoring and chatting with agents. Agents run locally via LangGraph.
 
 ---
 
 ## Agents
 
-### Email Agent
-
-A proactive inbox manager.
-
-- **Junk Management**: Scans for and automatically clears (marks as read) unnecessary emails like spam, newsletters, and promotions.
-- **Important Messages**: Identifies important emails and provides a summary.
-- **Drafting**: Creates professional drafted replies for emails requiring a response.
-
-### Calendar Agent
-
-A calendar management agent for reviewing and scheduling the week
-
-### Job Search Agent
-
-An agent that:
-
-1. job hunts
-2. classifies if a job is worth applying to based on my experience
-3. get approval that I want to apply
-4. creates optimized cover and resume
-5. present full application materials, check if applied or denied
-6. moves to a job tracker
-
-### Budget Agent
-
-a proactive financial advisor, helps create budgets, track spending, analyze data, and keep me on my goals
+| Agent | Port | Description |
+|---|---|---|
+| gmail-agent | 8001 | Proactive inbox manager — clears junk, surfaces important emails, drafts replies |
+| calendar-agent | 8002 | Calendar management — review and schedule the week |
+| budget-deepagent | 8003 | Financial advisor — budgets, spending tracking, goal analysis |
+| job-search-agent | 8005 | Job hunter — scrapes, classifies, drafts applications, tracks pipeline |
 
 ---
 
-## WIP / To-Come
+## Dev
 
-- upgrades to gmail and calendar from harness upgrade
-- managing assistant - with a2a helps to manage the overhead of multiple agents
-- News Agent
-- Prediction Market Agent
-- Lead Generation
+```bash
+make install          # Install Python + npm deps
+make run-frontend     # Next.js dashboard on :3000
+make run-gmail        # gmail-agent on :8001
+make run-calendar     # calendar-agent on :8002
+make run-budget       # budget-deepagent on :8003
+make run-job-search   # job-search-agent on :8005
+make start-all        # All services in background (logs in logs/)
+make stop-all         # Stop all background services
+```
 
-- upgrades to frontend components and pages
-- telegram bridge for remote agent communication (day=context window)
+---
+
+## Adding a New Agent
+
+1. `cp -r agents/_template agents/{name}`
+2. Edit `agents/{name}/agent.py` and `skills/`
+3. Add entry to `agents.yaml`
+4. Add entry to `frontend/src/lib/agents.ts`
+5. Add `run-{name}` target to `Makefile`
+
+---
+
+## WIP / Planned
+
+- gmail + calendar harness upgrades
+- managing-assistant (A2A orchestration)
+- news agent
+- prediction market agent
+- lead generation agent
+- telegram bridge for remote agent chat

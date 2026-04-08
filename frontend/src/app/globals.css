@@ -119,6 +119,116 @@
 }
 
 /* ─────────────────────────────────────────
+   CopilotKit — dark theme overrides
+   ───────────────────────────────────────── */
+:root {
+  /* Override CopilotKit's light defaults */
+  --copilot-kit-background-color:       #0d0d0d;
+  --copilot-kit-input-background-color: #181818;
+  --copilot-kit-secondary-color:        #111111;
+  --copilot-kit-secondary-contrast-color: #e4e4e7;
+  --copilot-kit-separator-color:        #2a2a2a;
+  --copilot-kit-muted-color:            #3f3f46;
+  /* Primary = agent accent, set per-instance via --agent-accent */
+  --copilot-kit-primary-color:          var(--agent-accent, #e4e4e7);
+  --copilot-kit-contrast-color:         #0d0d0d;
+}
+
+/* Remove the built-in header — we render our own */
+.copilotKitHeader { display: none !important; }
+
+/* Make the chat window fill its container with proper flex layout */
+.copilotKitChat {
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column !important;
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.copilotKitMessages {
+  background: transparent !important;
+}
+
+/* User message — subtle dark bubble with accent left-border */
+.copilotKitMessage.copilotKitUserMessage {
+  background: oklch(0.13 0 0) !important;
+  color: oklch(0.94 0 0) !important;
+  border: 1px solid oklch(0.20 0 0) !important;
+  border-left: 2px solid var(--agent-accent, oklch(0.55 0 0)) !important;
+  border-radius: 8px !important;
+  font-size: 0.875rem !important;
+  line-height: 1.6 !important;
+}
+
+/* Assistant message */
+.copilotKitMessage.copilotKitAssistantMessage {
+  color: oklch(0.88 0 0) !important;
+  font-size: 0.875rem !important;
+  line-height: 1.7 !important;
+}
+
+/* Input area */
+.copilotKitInput {
+  background: oklch(0.13 0 0) !important;
+  border: 1px solid oklch(0.22 0 0) !important;
+  border-radius: 10px !important;
+  transition: border-color 150ms ease !important;
+}
+
+.copilotKitInput:focus-within {
+  border-color: var(--agent-accent, oklch(0.55 0 0)) !important;
+}
+
+.copilotKitInput > textarea {
+  color: oklch(0.94 0 0) !important;
+  font-size: 0.875rem !important;
+}
+
+.copilotKitInput > textarea::placeholder {
+  color: oklch(0.45 0 0) !important;
+}
+
+/* Send button */
+.copilotKitInputControlButton:not([disabled]) {
+  color: var(--agent-accent, oklch(0.65 0 0)) !important;
+  opacity: 0.9;
+}
+
+.copilotKitInputControlButton:not([disabled]):hover {
+  color: var(--agent-accent, oklch(0.65 0 0)) !important;
+  opacity: 1;
+}
+
+/* Code blocks */
+.copilotKitCodeBlock {
+  background: oklch(0.10 0 0) !important;
+  border: 1px solid oklch(0.20 0 0) !important;
+  border-radius: 6px !important;
+  font-size: 0.8125rem !important;
+}
+
+.copilotKitCodeBlockToolbar {
+  background: oklch(0.13 0 0) !important;
+  border-bottom: 1px solid oklch(0.20 0 0) !important;
+}
+
+/* Activity / typing dots */
+.copilotKitActivityDot {
+  background: var(--agent-accent, oklch(0.65 0 0)) !important;
+}
+
+/* Hide "Powered by CopilotKit" text (targets the <p>, not the input container) */
+.poweredBy { display: none !important; }
+
+/* Scrollbar inside messages */
+.copilotKitMessages::-webkit-scrollbar { width: 4px; }
+.copilotKitMessages::-webkit-scrollbar-thumb { background: oklch(0.26 0 0); border-radius: 2px; }
+.copilotKitMessages::-webkit-scrollbar-track-piece { background: transparent; }
+
+/* ─────────────────────────────────────────
    Scrollbar
    ───────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }

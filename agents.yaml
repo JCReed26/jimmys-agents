@@ -26,14 +26,8 @@ agents:
     enabled: true
     rate_limit: "10/minute"
 
-  job-app-chain:
-    port: 8004
-    dir: automations/job-app-chain
-    enabled: true
-    rate_limit: "5/minute"
-
   job-search-agent:
     port: 8005
     dir: agents/job-search-agent
-    enabled: false
+    enabled: true
     rate_limit: "5/minute"

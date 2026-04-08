@@ -3,20 +3,13 @@ from langchain.tools import tool
 from deepagents.backends import FilesystemBackend
 from pathlib import Path
 import os
-from backend.models import free_nvidia_model
+from backend.models import gemini_flash_model
 from langchain_core.messages import HumanMessage
 from datetime import datetime
 from typing import TypedDict, Optional
 from sub_agents import job_tracker_agent, classification_agent, optimization_agent
 
-from deepagents.middleware import (
-    SubAgentMiddleware,
-    SkillsMiddleware,
-    MemoryMiddleware,
-    FilesystemMiddleware
-)
-
-llm = free_nvidia_model
+llm = gemini_flash_model
 
 class JobInProcess(TypedDict):
     id: str
