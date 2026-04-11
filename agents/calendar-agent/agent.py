@@ -1,6 +1,7 @@
-import datetime
 import sys
-from datetime import timedelta
+import os
+import json
+import asyncio
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -13,22 +14,26 @@ from backend.models import gemini_flash_model as llm
 from backend.auth import get_google_service
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_google_community import CalendarToolkit
 
 _AGENT_NAME = "calendar-agent"
 
 _SECRETS = Path(__file__).parent.parent.parent / "secrets"
 _SCOPES = ["https://www.googleapis.com/auth/calendar"]
-_NOT_CONNECTED = "Calendar not connected — add calendar_token.json to secrets/ and restart."
 
-SYSTEM_PROMPT = """You are a Calendar Management Agent with full control over the user's schedule.
+SYSTEM_PROMPT = """You are the Schedule and Todo Optimization Agent. You operate as an independent backend service triggered via an A2A protocol. 
 
-Operating rules:
-1. ALWAYS call get_current_datetime first when dates are ambiguous.
-2. NEVER create a conflicting event without warning the user.
-3. Before moving or updating an event, call get_detailed_agenda to find its ID.
-4. All times must be ISO 8601 format (e.g. 2024-01-30T14:00:00-05:00).
+CRITICAL DIRECTIVES:
+1. When triggered, you will receive a file path to a JSON payload in the `./workspace/pending_tasks/` directory. You must use `read_workspace_payload` to read this file and extract the scheduling request.
+2. Cross-reference the requested time constraints by searching the user's Google Calendar using your Calendar Toolkit, and gathering their pending task list using the Todoist MCP tools.
+3. Before creating any events, you MUST check calendar availability using the `search_events` tool to prevent double-booking.
+4. If the calendar slot is open, use `create_calendar_event` to explicitly block the time.
+5. If there is a scheduling conflict, do not overwrite existing high-priority events. Formulate an alternative proposed time or task arrangement and document the failure/alternative.
+6. Consult your Agents.md file for the user's default scheduling preferences (e.g., meeting duration, buffer times) and update it if you notice new recurring constraints.
+"""
 
-When asked "what's my week look like?", summarize get_detailed_agenda output grouped by day."""
+tools = []
 
 try:
     calendar_service = get_google_service(
@@ -38,165 +43,75 @@ try:
         service_name="calendar",
         service_version="v3",
     )
-    print(f"[{_AGENT_NAME}] Google Calendar connected.")
+    toolkit = CalendarToolkit(api_resource=calendar_service)
+    cal_tools = toolkit.get_tools()
+    tools.extend(cal_tools)
+    print(f"[{_AGENT_NAME}] Google Calendar connected. Tools: {[t.name for t in cal_tools]}")
 except Exception as e:
     print(f"[{_AGENT_NAME}] Calendar auth not found ({e}). Starting in disconnected mode.")
-    calendar_service = None
+    
+    @tool
+    def calendar_not_connected(query: str = "") -> str:
+        """Calendar not authenticated — add calendar_token.json to secrets/ and restart."""
+        return "Calendar is not connected. Run the OAuth flow to authenticate first."
+        
+    tools.append(calendar_not_connected)
 
 
 @tool
-def get_current_datetime() -> dict:
-    """Get the current date, time, and day of week. Call this first when dates are ambiguous."""
-    now = datetime.datetime.now()
-    return {
-        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": str(now.astimezone().tzinfo),
-        "day_of_week": now.strftime("%A"),
-    }
-
-
-@tool
-def list_calendars() -> list | str:
-    """List all calendars the user has access to."""
-    if calendar_service is None:
-        return _NOT_CONNECTED
+def read_workspace_payload(filepath: str) -> dict | str:
+    """Accepts a filepath, reads the JSON file from the workspace, and returns the parsed dictionary to the agent's context."""
+    path = Path(filepath)
+    if not path.exists():
+        return f"Error: File not found at {filepath}"
     try:
-        result = calendar_service.calendarList().list().execute()
-        return [
-            {"id": c["id"], "summary": c.get("summary", "No Title"), "primary": c.get("primary", False)}
-            for c in result.get("items", [])
-        ]
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return data
     except Exception as e:
-        return f"Error listing calendars: {e}"
+        return f"Error reading payload: {e}"
 
+tools.append(read_workspace_payload)
 
-@tool
-def get_detailed_agenda(days: int = 7, calendar_id: str = "primary") -> list | str:
-    """Get a list of events for the next N days. Use this before scheduling to check for conflicts.
-
-    Args:
-        days: Number of days to look ahead (default 7)
-        calendar_id: Calendar to check (default 'primary')
-    """
-    if calendar_service is None:
-        return _NOT_CONNECTED
+# Configure the Todoist MCP client
+def get_mcp_tools():
     try:
-        now = datetime.datetime.now().astimezone()
-        end = now + timedelta(days=days)
-        events_result = calendar_service.events().list(
-            calendarId=calendar_id,
-            timeMin=now.isoformat(),
-            timeMax=end.isoformat(),
-            singleEvents=True,
-            orderBy="startTime",
-        ).execute()
-        events = events_result.get("items", [])
-        return [
-            {
-                "summary": e.get("summary", "No Title"),
-                "start": e["start"].get("dateTime", e["start"].get("date")),
-                "end": e["end"].get("dateTime", e["end"].get("date")),
-                "id": e["id"],
-                "status": e.get("status"),
-            }
-            for e in events
-        ] or "No events found for this period."
+        loop = asyncio.get_event_loop()
+        
+        async def fetch_tools():
+            try:
+                token = os.getenv("TODOIST_API_TOKEN", "")
+                if not token:
+                    print(f"[{_AGENT_NAME}] TODOIST_API_TOKEN not found in env. MCP will be skipped.")
+                    return []
+                    
+                client = MultiServerMCPClient({
+                    "todoist": {
+                        "transport": "sse",
+                        "url": "https://ai.todoist.net/mcp",
+                        "headers": {
+                            "Authorization": f"Bearer {token}"
+                        }
+                    }
+                })
+                return await client.get_tools()
+            except Exception as e:
+                print(f"[{_AGENT_NAME}] Error loading MCP tools: {e}")
+                return []
+                
+        if loop.is_running():
+            import nest_asyncio
+            nest_asyncio.apply()
+            
+        return loop.run_until_complete(fetch_tools())
     except Exception as e:
-        return f"Error fetching agenda: {e}"
+        print(f"[{_AGENT_NAME}] Could not initialize MCP client: {e}")
+        return []
 
-
-@tool
-def create_calendar_event(
-    summary: str,
-    start_time: str,
-    end_time: str,
-    description: str = "",
-    calendar_id: str = "primary",
-) -> str:
-    """Create a new calendar event.
-
-    Args:
-        summary: Title of the event
-        start_time: ISO 8601 string (e.g. '2024-01-30T10:00:00-05:00')
-        end_time: ISO 8601 string
-        description: Optional details
-        calendar_id: Default 'primary'
-    """
-    if calendar_service is None:
-        return _NOT_CONNECTED
-    try:
-        event = calendar_service.events().insert(
-            calendarId=calendar_id,
-            body={
-                "summary": summary,
-                "description": description,
-                "start": {"dateTime": start_time},
-                "end": {"dateTime": end_time},
-            },
-        ).execute()
-        return f"Event created: {event.get('htmlLink')}"
-    except Exception as e:
-        return f"Error creating event: {e}"
-
-
-@tool
-def update_calendar_event(
-    event_id: str,
-    summary: str = "",
-    start_time: str = "",
-    end_time: str = "",
-    calendar_id: str = "primary",
-) -> str:
-    """Update an existing calendar event. Get event_id from get_detailed_agenda first.
-
-    Args:
-        event_id: The event ID to update
-        summary: New title (leave empty to keep existing)
-        start_time: New ISO 8601 start time (leave empty to keep existing)
-        end_time: New ISO 8601 end time (leave empty to keep existing)
-        calendar_id: Default 'primary'
-    """
-    if calendar_service is None:
-        return _NOT_CONNECTED
-    try:
-        event = calendar_service.events().get(calendarId=calendar_id, eventId=event_id).execute()
-        if summary:
-            event["summary"] = summary
-        if start_time:
-            event["start"]["dateTime"] = start_time
-        if end_time:
-            event["end"]["dateTime"] = end_time
-        updated = calendar_service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
-        return f"Event updated: {updated.get('htmlLink')}"
-    except Exception as e:
-        return f"Error updating event: {e}"
-
-
-@tool
-def delete_calendar_event(event_id: str, calendar_id: str = "primary") -> str:
-    """Delete a calendar event. Use with caution — this cannot be undone.
-
-    Args:
-        event_id: The event ID to delete (get it from get_detailed_agenda)
-        calendar_id: Default 'primary'
-    """
-    if calendar_service is None:
-        return _NOT_CONNECTED
-    try:
-        calendar_service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
-        return "Event deleted successfully."
-    except Exception as e:
-        return f"Error deleting event: {e}"
-
-
-tools = [
-    get_current_datetime,
-    list_calendars,
-    get_detailed_agenda,
-    create_calendar_event,
-    update_calendar_event,
-    delete_calendar_event,
-]
+mcp_tools = get_mcp_tools()
+if mcp_tools:
+    tools.extend(mcp_tools)
+    print(f"[{_AGENT_NAME}] Added {len(mcp_tools)} tools from Todoist MCP.")
 
 backend = FilesystemBackend(root_dir=Path(__file__).parent.absolute())
 agent = create_deep_agent(

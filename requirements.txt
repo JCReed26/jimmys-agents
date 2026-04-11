@@ -9,6 +9,10 @@ aiosqlite>=0.20.0
 langchain-google-genai
 langchain-openrouter>=0.2.1
 
+# MCP
+langchain-mcp-adapters
+mcp
+
 # Google APIs
 langchain-google-community[gmail,sheets]
 google-auth-oauthlib
