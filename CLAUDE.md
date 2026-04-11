@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Vision
 
-**jimmys-agents** is a personal multi-agent automation system. Agents are standalone LangGraph services. A Next.js dashboard (`frontend/`) shows agent status and provides a CopilotKit chat interface for testing each agent. The system runs locally on a Mac.
+**jimmys-agents** is a personal multi-agent automation system. Agents are standalone LangGraph services. A Next.js dashboard (`frontend/`) shows agent status and provides a native deepagents chat interface for each agent.
 
 **James builds agents. Claude handles system and orchestration.**
 
@@ -19,10 +19,10 @@ Architecture principles: **simple, minimal, solo-dev DX first**. No overengineer
 | Service | Port |
 |---|---|
 | Next.js frontend (`frontend/`) | 3000 |
+| template-agent | 8000 |
 | gmail-agent | 8001 |
 | calendar-agent | 8002 |
 | budget-deepagent | 8003 |
-| job-search-agent | 8005 |
 
 ---
 
@@ -37,8 +37,7 @@ jimmys-agents/
 │   ├── _template/              # REFERENCE — copy this for new agents
 │   ├── budget-deepagent/       # Active
 │   ├── gmail-agent/            # Active
-│   ├── calendar-agent/         # Active
-│   └── job-search-agent/       # Active
+│   └── calendar-agent/         # Active
 ├── frontend/                   # Next.js 16 dashboard
 │   └── src/
 │       ├── app/                # Pages + API routes
@@ -59,10 +58,10 @@ jimmys-agents/
 - **Python 3.13** — all agents
 - **deepagents** — agent framework (`create_deep_agent`, skills, middleware)
 - **LangGraph** — agent graph runtime (all agents use `langgraph dev`)
-- **LLM**: Gemini 2.5 Flash via `langchain-google-genai` (`temperature=0`)
+- **LLM**: Gemini 2.5 Flash via OpenRouter (`backend/models.py`, `temperature=0`)
 - **Make** — local process management
-- **Next.js 16** — frontend dashboard (App Router, TypeScript, shadcn/ui)
-- **CopilotKit** — chat UI + AG-UI runtime (`/api/copilotkit` → agent `/runs/stream`)
+- **Next.js 16** — frontend dashboard (App Router, TypeScript, shadcn/ui, Tailwind v4)
+- **useStream** — chat UI from `@langchain/langgraph-sdk/react` (CopilotKit removed April 2026)
 - **Google APIs** — Sheets, Gmail, Calendar, Drive (OAuth2)
 - **LangSmith** — always on when `LANGSMITH_TRACING=true`
 
@@ -76,48 +75,54 @@ make start-all        # Start all services in background, logs in logs/
 make stop-all         # Stop all background services
 
 make run-frontend     # Next.js on :3000
+make run-template     # template-agent on :8000
 make run-gmail        # gmail-agent on :8001
 make run-calendar     # calendar-agent on :8002
 make run-budget       # budget-deepagent on :8003
-make run-job-search   # job-search-agent on :8005
 ```
 
 **Adding a new agent**:
-1. Copy `agents/_template/` to `agents/{name}/`
-2. Edit `agents/{name}/agent.py` and `skills/` to define the agent.
-3. Add an entry to `agents.yaml` (copy format from existing entry).
-4. Add an entry to `frontend/src/lib/agents.ts` (copy existing pattern).
-5. Add a `run-{name}` target to `Makefile` (copy existing target).
+1. `cp -r agents/_template agents/{name}`
+2. Edit `agent.py`, `skills/`, update `_AGENT_NAME`
+3. Add entry to `agents.yaml`
+4. Add entry to `frontend/src/lib/agents.ts` (copy template-agent pattern)
+5. Add `run-{name}` target to `Makefile`
+6. Set `NEXT_PUBLIC_{NAME}_AGENT_URL` in `frontend/.env.local`
 
 ---
 
-## deepagent Pattern (reference: `agents/budget-deepagent/`)
+## deepagents Pattern (reference: `agents/_template/`)
 
-All new agents use `create_deep_agent`. Do NOT use `AgentExecutor` or `create_agent`.
+All agents use `create_deep_agent`. Do NOT use `AgentExecutor` or `create_agent`.
 
 ```python
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
-from deepagents.middleware import AgentMiddleware
+from deepagents.middleware.subagents import SubAgent
 
-class MyMiddleware(AgentMiddleware):
-    async def before_agent(self, state, runtime): ...  # pre-run hook
-    async def after_agent(self, state, runtime): ...   # post-run hook
+researcher: SubAgent = {
+    "name": "researcher",
+    "description": "...",
+    "system_prompt": "...",
+    "tools": [tool1, tool2],
+}
 
 agent = create_deep_agent(
     model=llm,
-    tools=tools,
-    skills=["skills/"],           # SKILL.md instruction modules
-    memory=["skills/AGENTS.md"],  # persistent agent notebook
-    backend=FilesystemBackend(...),
-    middleware=[MyMiddleware()],
+    tools=[...],
+    system_prompt="...",
+    skills=["skills/"],
+    memory=["skills/AGENTS.md"],
+    subagents=[researcher],
+    backend=FilesystemBackend(root_dir=Path(__file__).parent.absolute()),
+    name="agent-name",
 )
 ```
 
 Each agent dir has:
-- `agent.py` — agent definition (minimal, ~100 lines)
-- `server.py` — FastAPI AG-UI wrapper (for budget-deepagent pattern)
-- `langgraph.json` — `{"graphs": {"agent": "./agent.py:agent"}}`
+- `agent.py` — agent definition (~100 lines)
+- `tools.py` — tool definitions
+- `langgraph.json` — `{"graphs": {"agent": "./agent.py:agent"}, "env": "../../.env"}`
 - `skills/` — SKILL.md files + AGENTS.md memory
 
 ---
@@ -126,10 +131,9 @@ Each agent dir has:
 
 | Route | Purpose |
 |---|---|
-| `GET /api/agents` | Live agent status (polls each agent's `/runs/stream/health`) |
+| `GET /api/agents` | Live agent status — polls `GET :{port}/ok` |
 | `GET /api/agents-md/[name]` | Read agent's AGENTS.md from filesystem |
-| `POST /api/copilotkit` | CopilotKit runtime — proxies chat to agent `/runs/stream` |
-| `GET /api/health` | Health check for all agent services |
+| `GET /api/health` | Health check summary |
 
 ---
 
@@ -137,29 +141,34 @@ Each agent dir has:
 
 | Working on | Read first |
 |---|---|
-| `frontend/src/` (any component or API route) | `docs/dev-notes/frontend-patterns.md` |
-| Bugs, open issues | `docs/issues.md` |
+| Any frontend file | `docs/how-it-works/frontend.md` |
 | Building or modifying an agent | `docs/deepagents.md` + `agents/_template/` |
-| AG-UI protocol, stream events | `docs/ag-ui-api.md` |
+| Bugs, open issues | `docs/issues.md` |
+| System state / ports / env vars | `docs/system-truth.md` |
+| Deployment | `docs/how-it-works/deployment.md` |
 
 ---
 
 ## Active Rules
 
-- **AGENTS.md per agent**: `{agent.dir}/skills/AGENTS.md` is the agent's persistent notebook. Dashboard reads via `GET /api/agents-md/{name}`. Do not create `MEMORY.md`/`RULES.md` UI — those are agent-internal.
-- **Per-agent accent colors**: gmail=#00ff88, calendar=#00d4ff, budget=#a855f7, job-search=#f59e0b.
-- **Secrets in `secrets/`**: Agents look for `../../secrets/` (two levels up from `agents/{name}/`).
-- **Sheet locking in finally**: Any agent locking a Google Sheet cell must unlock in a `finally` block — never leave locked.
-- **Gemini tool compatibility**: Avoid batch tool schemas. Use individual atomic tools only.
-- **temperature=0**: All agents use deterministic outputs.
-- **LangSmith traces**: For `langgraph dev` mode, LangSmith traces automatically via env vars (`LANGSMITH_TRACING=true`).
-- **AG-UI stream**: Frontend chat → `POST /api/copilotkit` → CopilotKit `LangGraphAgent` (uses `@langchain/langgraph-sdk`) → agent LangGraph API (`langgraph dev`). All agents run via `langgraph dev`, NOT `uvicorn server:app`. The `server.py` / `ag_ui_langgraph` pattern is legacy — do not use for new agents.
-- **graphId must be "agent"**: Every agent's `langgraph.json` must declare `{"graphs": {"agent": "./agent.py:agent"}}`. The `graphId` in `agents.ts` must match. CopilotKit uses this to find the correct graph on the LangGraph server.
+- **`langgraph.json` must declare `"env": "../../.env"`**: Without it the server process never sees `LANGSMITH_TRACING` and traces are silently dropped. `load_dotenv()` in `agent.py` fires too late — LangSmith client is already initialized by then.
+- **Health endpoint is `/ok`**: `GET :{port}/ok` → `{"ok":true}`. Not `/health`, not `/runs/stream/health`.
+- **deepagents==0.4.7 API**: No `state_schema`, no `permissions` params on `create_deep_agent`. `SubAgent` is a TypedDict — pass as list.
+- **TodoListMiddleware is built-in**: `todos` appears in `stream.values.todos` automatically. No custom state schema needed.
+- **useStream `filterSubagentMessages` is untyped**: Use `as any` on the options object — the option exists at runtime but is missing from generic `UseStreamOptions` TypeScript types.
+- **`recursion_limit` is snake_case**: In `@langchain/langgraph-sdk` `Config` type. Not `recursionLimit`.
+- **`threadId = null` for new threads**: Pass `null` to `useStream` — it creates the thread on first submit and fires `onThreadId`. Pre-generating a UUID causes a 404 on `fetchStateHistory`.
+- **No icon imports in API routes**: Importing lucide-react in `/api/agents/route.ts` caused Turbopack to recompile the full icon tree on every health poll. Keep API routes free of UI imports.
+- **graphId must be "agent"**: Every agent's `langgraph.json` declares `{"graphs": {"agent": "./agent.py:agent"}}`. The `graphId` in `agents.ts` must match.
 - **`--no-browser` on langgraph dev**: Always use `--no-browser` in Makefile targets.
-- **`make install` uses `$(PYTHON) -m pip`**: Ensures deps install to the correct Python 3.13 venv.
-- **Auth is Supabase (email OTP)**: Frontend requires `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. See `.env.example`.
-- **Models via `backend/models.py`**: Agents should import `gemini_flash_model` from `models.py` instead of instantiating LLM clients directly.
+- **Models via `backend/models.py`**: Import `gemini_flash_model` — don't instantiate LLM clients directly.
+- **temperature=0**: All agents use deterministic outputs.
+- **Gemini tool compatibility**: Avoid batch tool schemas. Use individual atomic tools only.
+- **Secrets in `secrets/`**: Agents look for `../../secrets/` (two levels up from `agents/{name}/`).
+- **Sheet locking in finally**: Any agent locking a Google Sheet cell must unlock in a `finally` block.
+- **Auth is Supabase (email OTP)**: Frontend requires `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 - **docs/issues.md is the living issue tracker**: Update it when bugs are fixed or new issues are found.
+- **docs/changelog.md is the project timeline**: Add an entry whenever a meaningful phase of work completes.
 
 ---
 

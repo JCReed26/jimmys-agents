@@ -1,16 +1,22 @@
 import { NextResponse } from 'next/server';
-import { AGENTS } from '@/lib/agents';
 
-// Returns live status for each agent by hitting its health endpoint directly.
-// No gateway, no auth, no DB required.
+// Lightweight config — no icon imports so Turbopack doesn't recompile the
+// entire lucide-react tree on every health poll.
+const AGENT_PORTS: Record<string, { port: number; displayName: string; accentColor: string }> = {
+  'template-agent': { port: 8000, displayName: 'Template', accentColor: '#6366f1' },
+  'gmail-agent':    { port: 8001, displayName: 'Gmail',    accentColor: '#00ff88' },
+  'calendar-agent': { port: 8002, displayName: 'Calendar', accentColor: '#00d4ff' },
+  'budget-agent':   { port: 8003, displayName: 'Budget',   accentColor: '#a855f7' },
+};
+
 export async function GET() {
   const results: Record<string, object> = {};
 
   await Promise.all(
-    Object.values(AGENTS).map(async (agent) => {
+    Object.entries(AGENT_PORTS).map(async ([name, cfg]) => {
       let status = 'DOWN';
       try {
-        const r = await fetch(`http://localhost:${agent.port}/runs/stream/health`, {
+        const r = await fetch(`http://localhost:${cfg.port}/ok`, {
           signal: AbortSignal.timeout(1500),
           cache: 'no-store',
         });
@@ -18,12 +24,12 @@ export async function GET() {
       } catch {
         status = 'DOWN';
       }
-      results[agent.name] = {
+      results[name] = {
         status,
         enabled: true,
-        port: agent.port,
-        accentColor: agent.accentColor,
-        displayName: agent.displayName,
+        port: cfg.port,
+        accentColor: cfg.accentColor,
+        displayName: cfg.displayName,
         circuit: 'CLOSED',
       };
     })

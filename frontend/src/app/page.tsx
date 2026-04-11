@@ -28,7 +28,7 @@ export default function DashboardPage() {
       }
     }
     poll();
-    const iv = setInterval(poll, 8000);
+    const iv = setInterval(poll, 30000);
     return () => clearInterval(iv);
   }, []);
 
